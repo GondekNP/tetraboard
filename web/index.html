@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1.0">
+        <title>tetraboard</title>
+
+        <link rel="stylesheet" href="https://pyscript.net/releases/2023.11.2/core.css">
+        <script type="module" src="https://pyscript.net/releases/2023.11.2/core.js"></script>
+
+        <style>
+            /* Deliberately NOT scaling/stretching the canvas via CSS.
+               Keep it at its native pixel size so pointer coordinates
+               always line up 1:1 with what's drawn. If you ever add
+               responsive sizing here, re-check click alignment. */
+            body { margin: 0; background: #202020; }
+            #sketch-canvas { display: block; margin: 0 auto; }
+        </style>
+    </head>
+    <body>
+        <py-config>
+        {
+            "packages": ["sketchingpy==0.3.2"]
+        }
+        </py-config>
+
+        <div id="sketch-load-message">Loading...</div>
+        <canvas id="sketch-canvas"></canvas>
+
+        <script type="py" src="main.py"></script>
+    </body>
+</html>
