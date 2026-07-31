@@ -4,7 +4,6 @@ from enum import Enum
 
 # Board / grid configuration
 # --------------------------------------------------------------------------
-# FRET_SIZE = 40
 FRET_WIDTH = 70
 FRET_HEIGHT = 40
 
@@ -13,8 +12,8 @@ FRETBOARD_ROWS = 10
 FRETBOARD_BORDER_X = 40
 FRETBOARD_BORDER_Y = 40
 
-FRETBOARD_WIDTH = FRETBOARD_BORDER_X * 2 + (FRETBOARD_COLS * FRET_SIZE)
-FRETBOARD_HEIGHT = FRETBOARD_BORDER_Y * 2 + (FRETBOARD_ROWS * FRET_SIZE)
+FRETBOARD_WIDTH = FRETBOARD_BORDER_X * 2 + (FRETBOARD_COLS * FRET_WIDTH)
+FRETBOARD_HEIGHT = FRETBOARD_BORDER_Y * 2 + (FRETBOARD_ROWS * FRET_HEIGHT)
 
 TETRA_TRAY_HEIGHT = 200  # space below the fretboard for draggable pieces
 TETRA_TRAY_WIDTH = FRETBOARD_WIDTH  # same width as the fretboard

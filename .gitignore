@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .venv/
+
+# personal notes, not meant to be shared/committed
+TUTORIAL.md

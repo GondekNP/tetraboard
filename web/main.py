@@ -18,23 +18,22 @@ in place, no manual refresh or Pyodide reboot needed.
 """
 
 import random
-import sketchingpy
-from dataclasses import dataclass
 
+import sketchingpy
 from config import (
+    FRET_HEIGHT,
+    FRET_WIDTH,
     FRETBOARD_BORDER_X,
     FRETBOARD_BORDER_Y,
     FRETBOARD_COLS,
     FRETBOARD_ROWS,
-    FRET_WIDTH,
-    FRET_HEIGHT,
     FRETBOARD_WIDTH,
-    TOTAL_WIDTH,
-    TOTAL_HEIGHT,
     TETRA_TRAY_HEIGHT,
-    get_chromatic_scale,
+    TOTAL_HEIGHT,
+    TOTAL_WIDTH,
 )
-
+from fretboard import Fretboard
+from open_string import OpenString
 
 # --------------------------------------------------------------------------
 # Placeholder draggable pieces: cell offsets (col, row) from the piece's
@@ -116,71 +115,6 @@ def build_pieces():
     return [Piece(key, col, row) for key, (col, row) in zip(keys, spawn_positions)]
 
 
-@dataclass
-class Fretboard:
-    """The fret grid: its own bounds, background, and grid lines."""
-
-    x: int
-    y: int
-    cols: int
-    rows: int
-    fret_width: int
-    fret_height: int
-    open_strings: list[str]
-    n_frets: int
-
-    def __postinit__(self, open_strings=None):
-        self.strings = [String(open_string, n_frets) for open_string in open_strings]
-
-    @property
-    def width(self):
-        return self.cols * self.fret_width
-
-    @property
-    def height(self):
-        return self.rows * self.fret_height
-
-    def draw(self, sketch):
-        sketch.set_fill("#EEEEEE")
-        sketch.set_stroke("#303038")
-        sketch.set_stroke_weight(1)
-
-        sketch.draw_rect(self.x, self.y, self.width, self.height)
-
-        # for c in range(self.cols + 1):
-        #     x = self.x + c * self.fret_size
-        #     sketch.draw_line(x, self.y, x, self.y + self.height)
-        # for r in range(self.rows + 1):
-        #     y = self.y + r * self.fret_size
-        #     sketch.draw_line(self.x, y, self.x + self.width, y)
-
-
-@dataclass
-class String:
-    """A single string on the fretboard."""
-
-    note_identity: str
-    n_frets: int
-    fret_height: int = FRET_HEIGHT
-    fret_width: int = FRET_WIDTH
-
-    @property
-    def y(self):
-        return FRETBOARD_BORDER_Y + self.index * self.fret_height + self.fret_width / 2
-
-    def draw(self, sketch):
-        sketch.set_stroke("#303038")
-        sketch.set_stroke_weight(2)
-
-        for fret in self.n_frets:
-            sketch.draw_rect(
-                FRETBOARD_BORDER_X + fret * FRET_WIDTH,
-                self.y - (self.fret_height / 2),
-                FRET_WIDTH,
-                FRET_HEIGHT,
-            )
-
-
 class TetraTray:
     """The draggable-piece tray below the fretboard: bounds + background."""
 
@@ -205,12 +139,16 @@ class MainCanvas:
         self.sketch.set_title("tetraboard")
         self.sketch.set_rect_mode("corner")
 
+        self.strings = OpenString
         self.fretboard = Fretboard(
             FRETBOARD_BORDER_X,
             FRETBOARD_BORDER_Y,
             FRETBOARD_COLS,
             FRETBOARD_ROWS,
-            FRET_SIZE,
+            FRET_WIDTH,
+            FRET_HEIGHT,
+            [""] * FRETBOARD_ROWS,  # TODO: real open-string tuning goes here
+            FRETBOARD_COLS,
         )
         self.tetra_tray = TetraTray(
             0,
@@ -257,8 +195,8 @@ class MainCanvas:
             mouse = sketch_ref.get_mouse()
             px = mouse.get_pointer_x()
             py = mouse.get_pointer_y()
-            active.col = (px - active.drag_offset_x - FRETBOARD_BORDER_X) / FRET_SIZE
-            active.row = (py - active.drag_offset_y - FRETBOARD_BORDER_Y) / FRET_SIZE
+            active.col = (px - active.drag_offset_x - FRETBOARD_BORDER_X) / FRET_WIDTH
+            active.row = (py - active.drag_offset_y - FRETBOARD_BORDER_Y) / FRET_HEIGHT
 
         self.tetra_tray.draw(sketch_ref)
         self.fretboard.draw(sketch_ref)
