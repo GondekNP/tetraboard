@@ -27,6 +27,9 @@
         <div id="sketch-load-message">Loading...</div>
         <canvas id="sketch-canvas"></canvas>
 
-        <script type="py" src="main.py"></script>
+        <!-- devreload.py loads main.py itself and hot-swaps it on save
+             (see web/devreload.py) instead of main.py being the direct
+             entry point -- that's what lets edits skip the Pyodide boot. -->
+        <script type="py" src="devreload.py"></script>
     </body>
 </html>

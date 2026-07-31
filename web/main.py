@@ -13,10 +13,12 @@ Treat this as scaffolding to reshape, not a finished design. Ideas for
 where to take it from here are in the README.
 
 Requires nothing server-side -- this file is fetched and executed by
-PyScript/Pyodide in the browser. Edit, save, refresh the browser tab.
+PyScript/Pyodide in the browser. Edit, save: devreload.py hot-swaps it
+in place, no manual refresh or Pyodide reboot needed.
 """
 
 import random
+
 import sketchingpy
 
 # Flip this on if drag hit-testing ever feels misaligned again (it should
@@ -29,7 +31,7 @@ DEBUG_POINTER = False
 # --------------------------------------------------------------------------
 CELL_SIZE = 40
 BOARD_COLS = 12
-BOARD_ROWS = 14
+BOARD_ROWS = 22
 BOARD_X = 40
 BOARD_Y = 40
 
@@ -187,6 +189,8 @@ def main():
     sketch.get_mouse().on_button_release(on_release)
     sketch.on_step(step)
     sketch.show()
+
+    return sketch
 
 
 if __name__ == "__main__":
