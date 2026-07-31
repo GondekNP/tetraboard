@@ -1,4 +1,4 @@
-# fretboard-lab
+# tetraboard
 
 Local dev loop for iterating on a Sketchingpy-based fretboard diagram
 editor, without fighting the online editor's embedded-canvas quirks.
