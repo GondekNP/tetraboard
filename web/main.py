@@ -28,9 +28,9 @@ from config import (
     FRETBOARD_BORDER_Y,
     FRETBOARD_WIDTH,
     MODE_TRAY_HEIGHT,
-    OPEN_STRING_BUFFER_COLS,
     TOTAL_HEIGHT,
     TOTAL_WIDTH,
+    semitone_distance,
 )
 from fretboard import TUNINGS, FretboardBuilder
 
@@ -130,27 +130,35 @@ class Piece:
                 return True
         return False
 
-    def snap_to_grid(self, grid_cols, grid_rows, min_col=0):
-        """Round to the nearest cell and clamp within [min_col, grid_cols) x [0, grid_rows).
+    def snap_to_grid(self, grid_cols, grid_rows):
+        """Round to the nearest cell; clamp rows, but only lightly clamp columns.
 
-        Bounds are passed in rather than read from static config -- both
-        the fret count (controls.get_fret_count()) and the drawable area
-        (fretboard + however many mode trays are stacked below it) are
-        dynamic now, so a fixed FRETBOARD_COLS/FRETBOARD_ROWS would either
-        let pieces be dragged off the visible board or, worse, silently
-        yank a piece sitting in a lower tray back up on release.
+        Rows are clamped to [0, grid_rows) as before -- bounds are passed
+        in rather than read from static config since both the fret count
+        and the drawable area (fretboard + however many mode trays are
+        stacked below it) are dynamic, so a fixed FRETBOARD_COLS/ROWS
+        would either let pieces be dragged off the visible board or,
+        worse, silently yank a piece sitting in a lower tray back up on
+        release.
 
-        min_col defaults to 0 but callers pass a negative value (see
-        OPEN_STRING_BUFFER_COLS) so a tetra can still be snapped even when
-        part of it overhangs past the open string -- nothing playable
-        exists there, but a shape is still allowed to visually cover it.
+        Columns are handled differently: a tetra is allowed to overhang
+        either edge of the board (representing a pattern that starts
+        mid-shape, e.g. only the last two notes are reachable near the
+        nut). The one hard rule is that at least one of its note cells
+        must land on a real playable fret, where fret 0 (open string)
+        counts as playable -- so the clamp only kicks in once the whole
+        piece would otherwise drift entirely off one edge.
         """
         self.col = round(self.col)
         self.row = round(self.row)
 
-        max_col_offset = max(c for c, _ in self.cells)
+        min_cell_col = min(c for c, _ in self.cells)
+        max_cell_col = max(c for c, _ in self.cells)
         max_row_offset = max(r for _, r in self.cells)
-        max_col = grid_cols - (max_col_offset + 1)
+
+        last_fret = grid_cols - 1  # grid_cols spans fret 0 (open) .. last_fret inclusive
+        min_col = -max_cell_col  # piece's rightmost cell must reach fret 0 at worst
+        max_col = last_fret - min_cell_col  # piece's leftmost cell must reach the last fret at worst
         max_row = grid_rows - (max_row_offset + 1)
 
         self.col = max(min_col, min(self.col, max_col))
@@ -174,23 +182,31 @@ class Piece:
             )
 
 
-def build_pieces_for_mode(mode: "modes_module.Mode", tray: "TetraTray") -> list[Piece]:
-    """Lay out one Piece per tetra in `mode`, left to right inside `tray`.
+def build_pieces_for_mode(
+    mode: "modes_module.Mode", tray: "TetraTray", string_interval: int
+) -> list[Piece]:
+    """Lay out one Piece per shape in `mode`, left to right inside `tray`.
 
     Pieces use the same (col, row) grid Fret cells live on (see
     Piece.get_pixel_origin), so tray_row is tray.y expressed in that same
     grid -- keeping this in the grid's units (not raw pixels) is what
     makes a snapped-and-dragged piece land exactly on a real fret cell.
+
+    string_interval (semitones between adjacent strings in the active
+    tuning) is what lets a shape's `jumps` resolve into concrete cells
+    without modes.yaml knowing anything about the current tuning -- see
+    modes.py's Shape.resolve_cells.
     """
     tray_row = (tray.y - FRETBOARD_BORDER_Y) / FRET_HEIGHT + 0.5
     color = _with_alpha(mode.color)
 
     pieces = []
     col = 1
-    for tetra in mode.tetras:
-        pieces.append(Piece(tetra.cells, color, col, tray_row))
-        max_col_offset = max(c for c, _ in tetra.cells)
-        col += max_col_offset + 2  # one empty column of gap between tetras
+    for shape in mode.shapes:
+        cells = shape.resolve_cells(mode.intervals, string_interval)
+        pieces.append(Piece(cells, color, col, tray_row))
+        max_col_offset = max(c for c, _ in cells)
+        col += max_col_offset + 2  # one empty column of gap between shapes
     return pieces
 
 
@@ -268,14 +284,21 @@ class MainCanvas:
         # effect right now. Worth deciding how those two controls should
         # relate once you're back in fretboard.py.
         self.n_frets = controls.get_fret_count()
+        tuning = _resolve_tuning(controls.get_tuning())
         self.fretboard = (
             FretboardBuilder()
             .set_position(FRETBOARD_BORDER_X, FRETBOARD_BORDER_Y)
-            .set_tuning(_resolve_tuning(controls.get_tuning()))
+            .set_tuning(tuning)
             .set_n_frets(self.n_frets)
             .set_accidental_type(controls.get_accidental_type())
             .build()
         )
+        # Assumes a uniform interval between every adjacent string pair
+        # (true of every current tuning preset -- all perfect 4ths). A
+        # non-uniform tuning (e.g. guitar's major 3rd between G and B)
+        # would need this looked up per string pair instead of once.
+        self.string_interval = semitone_distance(tuning.value[0], tuning.value[1])
+
         # Only show the two trays picked in the control panel (decluttering
         # the palette) -- anything already dragged onto the board stays
         # regardless of this filter, since self.pieces below is built from
@@ -298,7 +321,7 @@ class MainCanvas:
         self.pieces = [
             piece
             for mode, tray in zip(self.modes, self.tetra_trays)
-            for piece in build_pieces_for_mode(mode, tray)
+            for piece in build_pieces_for_mode(mode, tray, self.string_interval)
         ]
         self.drag_state = {"active": None}
 
@@ -330,7 +353,7 @@ class MainCanvas:
 
         self.pieces = [piece for piece in self.pieces if not piece.in_tray]
         for mode, tray in zip(self.modes, self.tetra_trays):
-            self.pieces.extend(build_pieces_for_mode(mode, tray))
+            self.pieces.extend(build_pieces_for_mode(mode, tray, self.string_interval))
 
     def _on_press(self, button):
         mouse = self.sketch.get_mouse()
@@ -354,7 +377,7 @@ class MainCanvas:
         piece = self.drag_state["active"]
         if piece is not None:
             piece.dragging = False
-            piece.snap_to_grid(self.grid_cols, self.grid_rows, min_col=-OPEN_STRING_BUFFER_COLS)
+            piece.snap_to_grid(self.grid_cols, self.grid_rows)
             # "In the tray" is wherever it actually lands, not whether it
             # was touched -- a click or a drop-back-in-place shouldn't
             # count as "placed on the board" and get skipped by the next
@@ -363,6 +386,13 @@ class MainCanvas:
             self.drag_state["active"] = None
 
     def _step(self, sketch_ref):
+        # Nothing else paints the buffer margins around the board/trays
+        # opaquely every frame, so without this a piece dragged through
+        # that space leaves a trail of un-erased previous frames behind
+        # it (only became visible once overhang past the board edges
+        # became unlimited, rather than a single fixed buffer column).
+        sketch_ref.clear("#202020")
+
         active = self.drag_state["active"]
         if active is not None:
             mouse = sketch_ref.get_mouse()

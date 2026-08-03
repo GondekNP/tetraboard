@@ -31,7 +31,7 @@ class Fretboard:
 
     @property
     def height(self):
-        return sum([string.fret_width for string in self.strings])
+        return sum([string.fret_height for string in self.strings])
 
     def draw(self, sketch):
         sketch.set_fill("#EEEEEE")

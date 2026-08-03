@@ -91,3 +91,14 @@ def get_notes_for_string(
         ]
     else:
         raise ValueError("Invalid accidental type")
+
+
+def semitone_distance(note_a: str, note_b: str) -> int:
+    """Semitones from note_a up to note_b, e.g. the gap between two
+    adjacent open strings in a tuning -- used to generate tetrachord
+    string-jump shapes without baking a specific tuning into them (see
+    modes.py's Shape.resolve_cells).
+    """
+    return CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(
+        note_b
+    ) - CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(note_a)
