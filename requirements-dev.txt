@@ -1,3 +1,5 @@
 ruff
 mypy
 watchfiles
+pyyaml
+types-PyYAML

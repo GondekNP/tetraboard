@@ -56,14 +56,16 @@
     <body>
         <py-config>
         {
-            "packages": ["sketchingpy==0.3.2"],
+            "packages": ["sketchingpy==0.3.2", "pyyaml"],
             "fetch": [
                 {"files": [
                     "./config.py",
                     "./controls.py",
                     "./fret.py",
                     "./open_string.py",
-                    "./fretboard.py"
+                    "./fretboard.py",
+                    "./modes.py",
+                    "./modes.yaml"
                 ]}
             ]
         }
@@ -107,6 +109,31 @@
                     <option value="24" selected>24</option>
                     <option value="27">27</option>
                     <option value="30">30</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="control-accidental-type">Accidentals</label>
+                <select id="control-accidental-type">
+                    <option value="SHARP" selected>Sharps</option>
+                    <option value="FLAT">Flats</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="control-mode-a">Tray A</label>
+                <select id="control-mode-a">
+                    <option value="Major" selected>Major</option>
+                    <option value="Minor">Minor</option>
+                    <option value="Phrygian">Phrygian</option>
+                    <option value="Lydian">Lydian</option>
+                </select>
+                <label for="control-mode-b">Tray B</label>
+                <select id="control-mode-b">
+                    <option value="Major">Major</option>
+                    <option value="Minor" selected>Minor</option>
+                    <option value="Phrygian">Phrygian</option>
+                    <option value="Lydian">Lydian</option>
                 </select>
             </div>
 

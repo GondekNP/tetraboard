@@ -9,13 +9,23 @@ FRET_HEIGHT = 40
 
 FRETBOARD_COLS = 25
 FRETBOARD_ROWS = 10
-FRETBOARD_BORDER_X = 40
+
+# Extra draggable columns left of the open string (fret column 0), so a
+# tetra shape can be positioned covering the open string and beyond even
+# though nothing playable actually exists there -- see main.py's
+# Piece.snap_to_grid.
+OPEN_STRING_BUFFER_COLS = 1
+
+FRETBOARD_BORDER_X = 40 + (OPEN_STRING_BUFFER_COLS * FRET_WIDTH)
 FRETBOARD_BORDER_Y = 40
 
 FRETBOARD_WIDTH = FRETBOARD_BORDER_X * 2 + (FRETBOARD_COLS * FRET_WIDTH)
 FRETBOARD_HEIGHT = FRETBOARD_BORDER_Y * 2 + (FRETBOARD_ROWS * FRET_HEIGHT)
 
-TETRA_TRAY_HEIGHT = 200  # space below the fretboard for draggable pieces
+MODE_TRAY_HEIGHT = 130  # height of a single mode's tray (Major/Minor/Phrygian/Lydian)
+MODE_TRAY_COUNT = 4
+
+TETRA_TRAY_HEIGHT = MODE_TRAY_HEIGHT * MODE_TRAY_COUNT  # stacked mode trays
 TETRA_TRAY_WIDTH = FRETBOARD_WIDTH  # same width as the fretboard
 
 TOTAL_HEIGHT = FRETBOARD_HEIGHT + TETRA_TRAY_HEIGHT + (2 * FRETBOARD_BORDER_Y)
@@ -28,9 +38,6 @@ class AccidentalType(Enum):
 
 
 CHROMATIC_SCALE_SHARPS = [
-    "A",
-    "A#",
-    "B",
     "C",
     "C#",
     "D",
@@ -43,21 +50,13 @@ CHROMATIC_SCALE_SHARPS = [
     "A",
     "A#",
     "B",
-    "C",
-    "C#",
-    "D",
-    "D#",
-    "E",
-    "F",
-    "F#",
-    "G",
-    "G#",
+]
+
+CHROMATIC_SCALE_SHARPS_WITH_OCTAVE = [
+    letter + str(number) for number in range(9) for letter in CHROMATIC_SCALE_SHARPS
 ]
 
 CHROMATIC_SCALE_FLATS = [
-    "A",
-    "Bb",
-    "B",
     "C",
     "Db",
     "D",
@@ -70,26 +69,25 @@ CHROMATIC_SCALE_FLATS = [
     "A",
     "Bb",
     "B",
-    "C",
-    "Db",
-    "D",
-    "Eb",
-    "E",
-    "F",
-    "Gb",
-    "G",
-    "Ab",
+]
+
+CHROMATIC_SCALE_FLATS_WITH_OCTAVE = [
+    letter + str(number) for number in range(9) for letter in CHROMATIC_SCALE_FLATS
 ]
 
 
-def get_chromatic_scale(open_string: str, accidental_type: AccidentalType):
+def get_notes_for_string(
+    starting_note: str, n_frets: int, accidental_type: AccidentalType
+):
     if accidental_type == AccidentalType.SHARP:
-        first_index = CHROMATIC_SCALE_SHARPS.index(open_string)
-        return (
-            CHROMATIC_SCALE_SHARPS[first_index:] + CHROMATIC_SCALE_SHARPS[:first_index]
-        )
+        first_index = CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(starting_note)
+        return CHROMATIC_SCALE_SHARPS_WITH_OCTAVE[
+            first_index : first_index + n_frets + 1
+        ]
     elif accidental_type == AccidentalType.FLAT:
-        first_index = CHROMATIC_SCALE_FLATS.index(open_string)
-        return CHROMATIC_SCALE_FLATS[first_index:] + CHROMATIC_SCALE_FLATS[:first_index]
+        first_index = CHROMATIC_SCALE_FLATS_WITH_OCTAVE.index(starting_note)
+        return CHROMATIC_SCALE_SHARPS_WITH_OCTAVE[
+            first_index : first_index + n_frets + 1
+        ]
     else:
         raise ValueError("Invalid accidental type")

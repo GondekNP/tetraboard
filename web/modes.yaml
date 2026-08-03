@@ -1,0 +1,65 @@
+# Mode/tetra definitions -- what shows up in each of the four TetraTrays.
+#
+# Each tetra is a name plus a list of [col, row] cell offsets from its own
+# origin (col = fret offset, row = string offset). Loaded once by
+# modes.load_modes() via web/modes.py.
+#
+# Shapes below are derived from the tetrachord math on the whiteboard:
+# a tetrachord is 4 notes built from 3 semitone steps spanning a fret each
+# (col = cumulative semitones from the root):
+#   Major:    2,2,1 -> frets [0, 2, 4, 5]  (perfect 4th)
+#   Minor:    2,1,2 -> frets [0, 2, 3, 5]  (perfect 4th)
+#   Phrygian: 1,2,2 -> frets [0, 1, 3, 5]  (perfect 4th)
+#   Lydian:   2,2,2 -> frets [0, 2, 4, 6]  (tritone -- the "greedy" one)
+#
+# "straight" is that pattern played on one string, unmodified.
+#
+# "string-jump" plays the first 2 notes on the anchor string, then jumps
+# to the adjacent string a perfect 4th (5 semitones) higher for the last
+# 2 notes -- using bass's uniform-4ths tuning, a note at fret F on one
+# string is the same pitch as fret (F - 5) on the string above it. This
+# collapses every tetrachord (even Lydian's wide tritone span) into a
+# compact ~4-fret hand position, matching the "1 finger per fret" idea
+# on the whiteboard.
+#
+# NOTE (be sure to check this): the whiteboard shows THREE fretboard
+# shapes per mode (S/L/R), plus Lydian gets two more (ZIG/OPEN). I could
+# only confidently derive one straight shape and one string-jump shape
+# per mode from the math -- I wasn't able to verify the exact L vs R
+# distinction (a second, differently-split string-jump shape) or what
+# Lydian's ZIG/OPEN shapes should be from the photo alone, and didn't
+# want to guess at real fingering content. Tell me the rule for the
+# second jump variant (and what ZIG/OPEN mean) and I'll add them.
+
+modes:
+  - name: Major
+    color: "#22C55E"
+    tetras:
+      - name: straight
+        cells: [[0, 0], [2, 0], [4, 0], [5, 0]]
+      - name: string-jump
+        cells: [[0, 0], [1, 0], [1, 1], [3, 1]]
+
+  - name: Minor
+    color: "#3B82F6"
+    tetras:
+      - name: straight
+        cells: [[0, 0], [2, 0], [3, 0], [5, 0]]
+      - name: string-jump
+        cells: [[0, 0], [2, 0], [2, 1], [4, 1]]
+
+  - name: Phrygian
+    color: "#EC4899"
+    tetras:
+      - name: straight
+        cells: [[0, 0], [1, 0], [3, 0], [5, 0]]
+      - name: string-jump
+        cells: [[0, 0], [2, 0], [2, 1], [3, 1]]
+
+  - name: Lydian
+    color: "#F97316"
+    tetras:
+      - name: straight
+        cells: [[0, 0], [2, 0], [4, 0], [6, 0]]
+      - name: string-jump
+        cells: [[0, 0], [2, 0], [1, 1], [3, 1]]

@@ -2,7 +2,8 @@
 
 This is the portal between the plain-HTML control panel in index.html and
 whatever sketchingpy object graph main.py builds. It owns:
-  * reading the current picker selections (string count, tuning, fret count)
+  * reading the current picker selections (string count, tuning, fret
+    count, sharps/flats)
   * wiring the Export PNG / Save State / Load State controls to callbacks
     your own code registers
 
@@ -23,9 +24,14 @@ import urllib.parse
 import js
 from pyodide.ffi import create_proxy
 
+from config import AccidentalType
+
 _STRING_COUNT_ID = "control-string-count"
 _TUNING_ID = "control-tuning"
 _FRET_COUNT_ID = "control-fret-count"
+_ACCIDENTAL_TYPE_ID = "control-accidental-type"
+_MODE_A_ID = "control-mode-a"
+_MODE_B_ID = "control-mode-b"
 _EXPORT_PNG_ID = "control-export-png"
 _SAVE_STATE_ID = "control-save-state"
 _LOAD_STATE_ID = "control-load-state"
@@ -33,6 +39,7 @@ _LOAD_STATE_ID = "control-load-state"
 _export_png_callback = None
 _save_state_callback = None
 _load_state_callback = None
+_visible_modes_change_callback = None
 
 
 def get_string_count() -> int:
@@ -51,6 +58,43 @@ def get_fret_count() -> int:
     """Read the currently selected fret count."""
     element = js.document.getElementById(_FRET_COUNT_ID)
     return int(element.value)
+
+
+def get_accidental_type() -> AccidentalType:
+    """Read the currently selected sharps/flats toggle.
+
+    Returns the same AccidentalType config.get_chromatic_scale() expects,
+    so this drops straight in wherever you're computing fret note names.
+    """
+    element = js.document.getElementById(_ACCIDENTAL_TYPE_ID)
+    return AccidentalType[element.value]
+
+
+def get_visible_modes() -> list[str]:
+    """Read the two mode names currently picked for display (Tray A/B).
+
+    Returns names, not a domain Mode object -- like get_tuning(), this
+    stays domain-agnostic; matching them against modes.yaml's actual
+    Mode list is main.py's job.
+    """
+    mode_a = js.document.getElementById(_MODE_A_ID).value
+    mode_b = js.document.getElementById(_MODE_B_ID).value
+    return [mode_a, mode_b]
+
+
+def on_visible_modes_change(callback):
+    """Register what happens when either mode tray picker (Tray A/B) changes.
+
+    Unlike the other pickers (read once when the sketch is built), this
+    one fires live -- a tray filter feels broken if picking a new mode
+    silently does nothing until the next reload.
+
+    Args:
+        callback: Zero-argument function. Call get_visible_modes() again
+            inside it to see the new selection.
+    """
+    global _visible_modes_change_callback
+    _visible_modes_change_callback = callback
 
 
 def on_export_png(callback):
@@ -99,6 +143,11 @@ def _download_text(text: str, filename: str, mime: str):
     link.click()
 
 
+def _handle_visible_modes_change(event):
+    if _visible_modes_change_callback is not None:
+        _visible_modes_change_callback()
+
+
 def _handle_export_png(event):
     if _export_png_callback is not None:
         _export_png_callback()
@@ -122,6 +171,12 @@ async def _handle_load_state(event):
 
 
 def _bind():
+    mode_a_select = js.document.getElementById(_MODE_A_ID)
+    mode_a_select.addEventListener("change", create_proxy(_handle_visible_modes_change))
+
+    mode_b_select = js.document.getElementById(_MODE_B_ID)
+    mode_b_select.addEventListener("change", create_proxy(_handle_visible_modes_change))
+
     export_button = js.document.getElementById(_EXPORT_PNG_ID)
     export_button.addEventListener("click", create_proxy(_handle_export_png))
 

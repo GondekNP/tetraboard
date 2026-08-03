@@ -18,21 +18,26 @@ class Fret:
     pixel_width: int = 0
     pixel_height: int = 0
 
-    def draw(self, canvas):
-        """Draw the fret on the given canvas."""
-        x, y = self.pixel_origin
-        canvas.create_rectangle(
-            x,
-            y,
-            x + self.pixel_width,
-            y + self.pixel_height,
-            fill="white" if not self.selected else "blue",
-            outline="black",
+    def draw(self, sketch):
+        """Draw this fret on the sketch."""
+        sketch.draw_rect(
+            self.pixel_origin[0],
+            self.pixel_origin[1],
+            self.pixel_width,
+            self.pixel_height,
         )
-        if self.note:
-            canvas.create_text(
-                x + self.pixel_width / 2,
-                y + self.pixel_height / 2,
-                text=self.note,
-                fill="black",
-            )
+
+        # push_style/pop_style scope the fill/font/align changes below to
+        # just this text draw -- sketchingpy's style state is otherwise
+        # sticky, so without this every fret drawn after this one would
+        # inherit this dark fill for its own rect background too.
+        sketch.push_style()
+        sketch.set_fill("#303038")
+        sketch.set_text_font("sans-serif", 14)
+        sketch.set_text_align("center", "center")
+        sketch.draw_text(
+            self.pixel_origin[0] + self.pixel_width / 2,
+            self.pixel_origin[1] + self.pixel_height / 2,
+            self.note,
+        )
+        sketch.pop_style()

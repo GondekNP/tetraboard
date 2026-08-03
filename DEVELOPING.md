@@ -47,10 +47,15 @@ touches those DOM elements. It knows nothing about `Fret`/`OpenString`/
    ```python
    import controls
 
-   controls.get_string_count()   # -> int, e.g. 6
-   controls.get_tuning()          # -> list[str], e.g. ["B0", "E1", "A1", "D2", "G2", "C3"]
-   controls.get_fret_count()      # -> int, e.g. 24
+   controls.get_string_count()     # -> int, e.g. 6
+   controls.get_tuning()            # -> list[str], e.g. ["B0", "E1", "A1", "D2", "G2", "C3"]
+   controls.get_fret_count()        # -> int, e.g. 24
+   controls.get_accidental_type()   # -> config.AccidentalType, e.g. AccidentalType.SHARP
    ```
+
+   `get_accidental_type()` returns exactly what `config.get_chromatic_scale()`
+   expects as its `accidental_type` argument -- the note-name gap flagged in
+   `OpenString._build_frets()`'s nudge comment is this control's other half.
 
 2. **Fire callbacks you register**, for the three buttons/inputs it can't
    act on by itself because it doesn't know what "your state" or "your
