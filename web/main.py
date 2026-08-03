@@ -30,6 +30,8 @@ from config import (
     MODE_TRAY_HEIGHT,
     TOTAL_HEIGHT,
     TOTAL_WIDTH,
+    get_scale_pitch_classes,
+    pitch_class,
     semitone_distance,
 )
 from fretboard import TUNINGS, FretboardBuilder
@@ -75,6 +77,9 @@ def _with_alpha(hex_color: str, alpha_hex: str = "80") -> str:
 
 
 _GAP_CELL_COLOR = "#9CA3AF"
+_INVALID_CELL_COLOR = "#EF4444C0"
+_SCALE_HIGHLIGHT_COLOR = "#22C55E80"
+_SCALE_HIGHLIGHT_RADIUS = 6
 
 
 def _compute_gap_cells(cells):
@@ -164,7 +169,7 @@ class Piece:
         self.col = max(min_col, min(self.col, max_col))
         self.row = max(0, min(self.row, max_row))
 
-    def draw(self, sketch):
+    def draw(self, sketch, invalid=False):
         x, y = self.get_pixel_origin()
         sketch.set_stroke("#202020")
         sketch.set_stroke_weight(2)
@@ -175,11 +180,55 @@ class Piece:
                 x + dc * FRET_WIDTH, y + dr * FRET_HEIGHT, FRET_WIDTH, FRET_HEIGHT
             )
 
-        sketch.set_fill(self.color)
+        sketch.set_fill(_INVALID_CELL_COLOR if invalid else self.color)
         for dc, dr in self.cells:
             sketch.draw_rect(
                 x + dc * FRET_WIDTH, y + dr * FRET_HEIGHT, FRET_WIDTH, FRET_HEIGHT
             )
+
+
+def piece_fits_scale(piece: "Piece", strings_by_row, grid_cols: int, scale_pitch_classes: set) -> bool:
+    """Whether every note cell of `piece` (its actual notes, not the gray
+    gap cells) is a member of `scale_pitch_classes`.
+
+    This is the whole validator: every mode tray's tetrachord is, by
+    construction, some mode's tetrachord lifted from the same parent
+    Ionian scale (see config.get_scale_pitch_classes' docstring) -- so
+    there's no need to derive a different scale per mode. A piece is
+    "legal" if the pitch classes it actually lands on, wherever it's been
+    dragged, all belong to the current key's one 7-note set.
+
+    Cells that overhang off the board (no real fret/string there) are
+    skipped rather than failing the check -- overhang is allowed by
+    Piece.snap_to_grid already, and there's no note to validate there.
+    """
+    for dc, dr in piece.cells:
+        col = piece.col + dc
+        row = piece.row + dr
+        string = strings_by_row.get(row)
+        if string is None or col < 0 or col >= grid_cols:
+            continue
+        if pitch_class(string.frets[col].note) not in scale_pitch_classes:
+            return False
+    return True
+
+
+def draw_scale_highlights(sketch, fretboard, scale_pitch_classes: set):
+    """Mark every fret across the whole board whose note belongs to
+    `scale_pitch_classes` -- the "generate the valid placements" half of
+    the validator, drawn under the pieces so a dragged tetra still shows
+    on top of it.
+    """
+    sketch.push_style()
+    sketch.set_fill(_SCALE_HIGHLIGHT_COLOR)
+    sketch.set_stroke(_SCALE_HIGHLIGHT_COLOR)
+    for string in fretboard.strings:
+        for fret in string.frets:
+            if pitch_class(fret.note) in scale_pitch_classes:
+                cx = fret.pixel_origin[0] + fret.pixel_width / 2
+                cy = fret.pixel_origin[1] + fret.pixel_height / 2
+                sketch.draw_ellipse(cx, cy, _SCALE_HIGHLIGHT_RADIUS, _SCALE_HIGHLIGHT_RADIUS)
+    sketch.pop_style()
 
 
 def build_pieces_for_mode(
@@ -299,6 +348,16 @@ class MainCanvas:
         # would need this looked up per string pair instead of once.
         self.string_interval = semitone_distance(tuning.value[0], tuning.value[1])
 
+        # Row -> OpenString lookup for the validator (piece_fits_scale) --
+        # fretboard.strings is ordered low-to-high-note (tuning order), not
+        # by drawn row, so this has to be keyed off each string's own
+        # .index (0 = top/highest string, same convention Piece.row uses).
+        self.strings_by_row = {string.index: string for string in self.fretboard.strings}
+
+        self.key = controls.get_key()
+        self.validation_enabled = controls.is_validation_enabled()
+        self.scale_pitch_classes = get_scale_pitch_classes(self.key)
+
         # Only show the two trays picked in the control panel (decluttering
         # the palette) -- anything already dragged onto the board stays
         # regardless of this filter, since self.pieces below is built from
@@ -335,6 +394,15 @@ class MainCanvas:
         self.sketch.get_mouse().on_button_release(self._on_release)
         self.sketch.on_step(self._step)
         controls.on_visible_modes_change(self._rebuild_trays)
+        controls.on_validator_change(self._on_validator_change)
+
+    def _on_validator_change(self):
+        """Live update when the Key picker or Validate checkbox changes --
+        same reasoning as _rebuild_trays: a control that silently does
+        nothing until the next reload would just look broken."""
+        self.key = controls.get_key()
+        self.validation_enabled = controls.is_validation_enabled()
+        self.scale_pitch_classes = get_scale_pitch_classes(self.key)
 
     def _rebuild_trays(self):
         """Re-populate the (fixed, always-2) tray slots when Tray A/B change.
@@ -405,9 +473,16 @@ class MainCanvas:
             tray.draw(sketch_ref)
         self.fretboard.draw(sketch_ref)
         draw_fret_markers(sketch_ref, self.fretboard, self.n_frets)
+        if self.validation_enabled:
+            draw_scale_highlights(sketch_ref, self.fretboard, self.scale_pitch_classes)
 
         for piece in self.pieces:
-            piece.draw(sketch_ref)
+            invalid = (
+                self.validation_enabled
+                and not piece.in_tray
+                and not piece_fits_scale(piece, self.strings_by_row, self.grid_cols, self.scale_pitch_classes)
+            )
+            piece.draw(sketch_ref, invalid=invalid)
 
     def _fix_canvas_sharpness(self):
         """Match the canvas's backing-store resolution to the display's

@@ -37,9 +37,16 @@
 # [[col, row], ...]` list -- an escape hatch for one-off shapes (e.g. a
 # 3-string-crossing fingering) that don't fit the jump rule above.
 #
-# NOTE (still open): the whiteboard also shows Lydian ZIG/OPEN
-# variants distinct from right/left -- not defined yet, tell me the
-# rule and I'll add them.
+# Lydian's wider tritone span earns it two more named shapes than the
+# other modes, verified the same way (root = A, 5th fret low string):
+#   zig:  A(5) B(7) on anchor; C#(4) D#(6) on the string above
+#         -- same jump point as the other modes' "left" (jumps: [2]),
+#            just a different name here
+#   open: A(5) on anchor; B(2) C#(4) on the string above; D#(1) on the
+#         string above THAT -- two jumps (jumps: [1, 3])
+# Note Lydian's own "left" is a third, later jump point (jumps: [3]:
+# A(5) B(7) C#(9) on anchor, D#(6) on the string above) -- not the same
+# jump index as "left" in the other modes' shape sets.
 
 modes:
   - name: Major
@@ -83,5 +90,9 @@ modes:
         jumps: []
       - name: right
         jumps: [1]
-      - name: left
+      - name: zig
         jumps: [2]
+      - name: left
+        jumps: [3]
+      - name: open
+        jumps: [1, 3]

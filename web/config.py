@@ -102,3 +102,39 @@ def semitone_distance(note_a: str, note_b: str) -> int:
     return CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(
         note_b
     ) - CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(note_a)
+
+
+# Ionian (major scale) whole/half step pattern -- the "parent scale" the
+# validator checks against. Every mode tray (Major/Minor/Phrygian/Lydian)
+# is, by construction, a tetrachord lifted straight from some mode of this
+# same parent scale (Major = Ionian's own lower tetrachord rooted on the
+# key; Lydian's tetrachord is the Ionian pattern's own 4th-degree
+# tetrachord; etc) -- so the *pitch classes* valid for any of them, in a
+# given key, are always exactly this one 7-note set. That's what makes the
+# "simple" validation approach simple: don't bother deriving a different
+# scale per mode, just check every dropped piece's notes against this one
+# key's Ionian pitch-class set, regardless of which tray it came from.
+IONIAN_INTERVALS = [2, 2, 1, 2, 2, 2, 1]
+
+
+def get_scale_pitch_classes(root: str, intervals: list[int] = IONIAN_INTERVALS) -> set[str]:
+    """The pitch classes (no octave) of the scale built from `root` using
+    `intervals` (cumulative semitone steps, wrapping at the octave).
+
+    `root` must be a bare pitch class from CHROMATIC_SCALE_SHARPS (e.g.
+    "A", "C#") -- not an octave-qualified note like "A1".
+    """
+    cumulative = [0]
+    for step in intervals[:-1]:
+        cumulative.append(cumulative[-1] + step)
+
+    root_index = CHROMATIC_SCALE_SHARPS.index(root)
+    return {
+        CHROMATIC_SCALE_SHARPS[(root_index + semitones) % 12] for semitones in cumulative
+    }
+
+
+def pitch_class(note: str) -> str:
+    """Strip an octave-qualified note (e.g. "A1", "C#3") down to its bare
+    pitch class ("A", "C#") for scale-membership comparisons."""
+    return note.rstrip("0123456789")

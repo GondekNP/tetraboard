@@ -32,6 +32,8 @@ _FRET_COUNT_ID = "control-fret-count"
 _ACCIDENTAL_TYPE_ID = "control-accidental-type"
 _MODE_A_ID = "control-mode-a"
 _MODE_B_ID = "control-mode-b"
+_KEY_ID = "control-key"
+_VALIDATE_TOGGLE_ID = "control-validate-toggle"
 _EXPORT_PNG_ID = "control-export-png"
 _SAVE_STATE_ID = "control-save-state"
 _LOAD_STATE_ID = "control-load-state"
@@ -40,6 +42,7 @@ _export_png_callback = None
 _save_state_callback = None
 _load_state_callback = None
 _visible_modes_change_callback = None
+_validator_change_callback = None
 
 
 def get_string_count() -> int:
@@ -80,6 +83,34 @@ def get_visible_modes() -> list[str]:
     mode_a = js.document.getElementById(_MODE_A_ID).value
     mode_b = js.document.getElementById(_MODE_B_ID).value
     return [mode_a, mode_b]
+
+
+def get_key() -> str:
+    """Read the currently selected key (a bare pitch class, e.g. "A", "C#") --
+    the root the validator builds its Ionian scale from."""
+    element = js.document.getElementById(_KEY_ID)
+    return element.value
+
+
+def is_validation_enabled() -> bool:
+    """Read the Validate checkbox: whether dropped pieces should be checked
+    against the current key's scale."""
+    element = js.document.getElementById(_VALIDATE_TOGGLE_ID)
+    return bool(element.checked)
+
+
+def on_validator_change(callback):
+    """Register what happens when the Key picker or Validate checkbox
+    changes. Fires live, same reasoning as on_visible_modes_change --
+    picking a new key or flipping the toggle should update immediately,
+    not wait for a reload.
+
+    Args:
+        callback: Zero-argument function. Call get_key()/
+            is_validation_enabled() again inside it to see the new values.
+    """
+    global _validator_change_callback
+    _validator_change_callback = callback
 
 
 def on_visible_modes_change(callback):
@@ -148,6 +179,11 @@ def _handle_visible_modes_change(event):
         _visible_modes_change_callback()
 
 
+def _handle_validator_change(event):
+    if _validator_change_callback is not None:
+        _validator_change_callback()
+
+
 def _handle_export_png(event):
     if _export_png_callback is not None:
         _export_png_callback()
@@ -176,6 +212,12 @@ def _bind():
 
     mode_b_select = js.document.getElementById(_MODE_B_ID)
     mode_b_select.addEventListener("change", create_proxy(_handle_visible_modes_change))
+
+    key_select = js.document.getElementById(_KEY_ID)
+    key_select.addEventListener("change", create_proxy(_handle_validator_change))
+
+    validate_toggle = js.document.getElementById(_VALIDATE_TOGGLE_ID)
+    validate_toggle.addEventListener("change", create_proxy(_handle_validator_change))
 
     export_button = js.document.getElementById(_EXPORT_PNG_ID)
     export_button.addEventListener("click", create_proxy(_handle_export_png))
