@@ -31,7 +31,7 @@ from config import (
     TOTAL_HEIGHT,
     TOTAL_WIDTH,
     get_scale_pitch_classes,
-    pitch_class,
+    pitch_class_semitone,
     semitone_distance,
 )
 from fretboard import TUNINGS, FretboardBuilder
@@ -114,7 +114,13 @@ class Piece:
         self.dragging = False
         self.drag_offset_x = 0
         self.drag_offset_y = 0
-        self.in_tray = True  # False once dropped -- see MainCanvas._on_release
+
+    def clone(self) -> "Piece":
+        """A fresh, independent copy at the same position -- used to stamp
+        a new board piece out of a tray template without disturbing the
+        template itself (see MainCanvas._on_press: the template is an
+        unlimited supply, not a single draggable instance)."""
+        return Piece(self.cells, self.color, self.col, self.row)
 
     def get_pixel_origin(self):
         x = FRETBOARD_BORDER_X + self.col * FRET_WIDTH
@@ -201,14 +207,19 @@ def piece_fits_scale(piece: "Piece", strings_by_row, grid_cols: int, scale_pitch
     Cells that overhang off the board (no real fret/string there) are
     skipped rather than failing the check -- overhang is allowed by
     Piece.snap_to_grid already, and there's no note to validate there.
+
+    piece.col/row are floats while the piece is actively being dragged
+    (see MainCanvas._step) -- rounded to the nearest cell here so this
+    can be called every frame, including on the piece currently under
+    the mouse, without indexing `frets` with a float.
     """
     for dc, dr in piece.cells:
-        col = piece.col + dc
-        row = piece.row + dr
+        col = round(piece.col) + dc
+        row = round(piece.row) + dr
         string = strings_by_row.get(row)
         if string is None or col < 0 or col >= grid_cols:
             continue
-        if pitch_class(string.frets[col].note) not in scale_pitch_classes:
+        if pitch_class_semitone(string.frets[col].note) not in scale_pitch_classes:
             return False
     return True
 
@@ -224,7 +235,7 @@ def draw_scale_highlights(sketch, fretboard, scale_pitch_classes: set):
     sketch.set_stroke(_SCALE_HIGHLIGHT_COLOR)
     for string in fretboard.strings:
         for fret in string.frets:
-            if pitch_class(fret.note) in scale_pitch_classes:
+            if pitch_class_semitone(fret.note) in scale_pitch_classes:
                 cx = fret.pixel_origin[0] + fret.pixel_width / 2
                 cy = fret.pixel_origin[1] + fret.pixel_height / 2
                 sketch.draw_ellipse(cx, cy, _SCALE_HIGHLIGHT_RADIUS, _SCALE_HIGHLIGHT_RADIUS)
@@ -360,8 +371,8 @@ class MainCanvas:
 
         # Only show the two trays picked in the control panel (decluttering
         # the palette) -- anything already dragged onto the board stays
-        # regardless of this filter, since self.pieces below is built from
-        # this already-filtered self.modes.
+        # regardless of this filter, since board_pieces is a wholly
+        # separate list from the tray templates built from self.modes.
         self.modes = _load_visible_modes()
 
         trays_top = FRETBOARD_BORDER_Y + self.fretboard.height + FRETBOARD_BORDER_Y
@@ -377,11 +388,17 @@ class MainCanvas:
             for i, mode in enumerate(self.modes)
         ]
 
-        self.pieces = [
+        # Tray pieces are fixed templates -- clicking one stamps a fresh
+        # Piece.clone() onto the board rather than moving the template
+        # itself, so a shape is never "used up" and can be stacked as many
+        # times as you like (see _on_press). board_pieces holds every
+        # clone that's actually been dropped onto the board.
+        self.tray_pieces = [
             piece
             for mode, tray in zip(self.modes, self.tetra_trays)
             for piece in build_pieces_for_mode(mode, tray, self.string_interval)
         ]
+        self.board_pieces: list[Piece] = []
         self.drag_state = {"active": None}
 
         # +1: OpenString now builds fret_index 0 (open) through n_frets
@@ -395,6 +412,12 @@ class MainCanvas:
         self.sketch.on_step(self._step)
         controls.on_visible_modes_change(self._rebuild_trays)
         controls.on_validator_change(self._on_validator_change)
+        controls.on_clear_board(self._clear_board)
+
+    def _clear_board(self):
+        """Wipe every piece placed on the board, leaving the tray
+        templates (and their infinite supply) untouched."""
+        self.board_pieces = []
 
     def _on_validator_change(self):
         """Live update when the Key picker or Validate checkbox changes --
@@ -410,8 +433,9 @@ class MainCanvas:
         Fires live from controls.py's change listener rather than waiting
         for the next main.py hot-swap -- a filter control that silently
         does nothing until an unrelated save/reload would just look
-        broken. Only replaces still-in-tray pieces; anything already
-        dragged onto the board (piece.in_tray is False) is left alone.
+        broken. Only replaces the tray templates -- board_pieces (already
+        stamped out onto the board) are a separate list entirely, so a
+        tray filter change never touches anything already placed.
         """
         self.modes = _load_visible_modes()
 
@@ -419,38 +443,56 @@ class MainCanvas:
             tray.mode_name = mode.name
             tray.color = mode.color
 
-        self.pieces = [piece for piece in self.pieces if not piece.in_tray]
-        for mode, tray in zip(self.modes, self.tetra_trays):
-            self.pieces.extend(build_pieces_for_mode(mode, tray, self.string_interval))
+        self.tray_pieces = [
+            piece
+            for mode, tray in zip(self.modes, self.tetra_trays)
+            for piece in build_pieces_for_mode(mode, tray, self.string_interval)
+        ]
+
+    def _start_dragging(self, piece):
+        mouse = self.sketch.get_mouse()
+        px = mouse.get_pointer_x()
+        py = mouse.get_pointer_y()
+        piece.dragging = True
+        x, y = piece.get_pixel_origin()
+        piece.drag_offset_x = px - x
+        piece.drag_offset_y = py - y
+        self.drag_state["active"] = piece
 
     def _on_press(self, button):
         mouse = self.sketch.get_mouse()
         px = mouse.get_pointer_x()
         py = mouse.get_pointer_y()
 
-        for piece in reversed(self.pieces):
+        # Board pieces take priority (topmost/most-recently-placed first)
+        # so an already-placed piece can be picked back up and moved.
+        for piece in reversed(self.board_pieces):
             if piece.contains_point(px, py):
-                piece.dragging = True
-                x, y = piece.get_pixel_origin()
-                piece.drag_offset_x = px - x
-                piece.drag_offset_y = py - y
+                self.board_pieces.remove(piece)
+                self.board_pieces.append(piece)  # bring to front
+                self._start_dragging(piece)
+                return
 
-                self.pieces.remove(piece)
-                self.pieces.append(piece)  # bring to front
-
-                self.drag_state["active"] = piece
-                break
+        # Otherwise, clicking a tray template stamps a brand new clone
+        # onto the board and starts dragging *that* -- the template stays
+        # put, so the same shape can be dragged out any number of times.
+        for template in reversed(self.tray_pieces):
+            if template.contains_point(px, py):
+                clone = template.clone()
+                self.board_pieces.append(clone)
+                self._start_dragging(clone)
+                return
 
     def _on_release(self, button):
         piece = self.drag_state["active"]
         if piece is not None:
             piece.dragging = False
             piece.snap_to_grid(self.grid_cols, self.grid_rows)
-            # "In the tray" is wherever it actually lands, not whether it
-            # was touched -- a click or a drop-back-in-place shouldn't
-            # count as "placed on the board" and get skipped by the next
-            # tray rebuild.
-            piece.in_tray = piece.row >= len(self.fretboard.strings)
+            # Dropping a piece back into the tray area discards it --
+            # there's no reason to keep a redundant copy sitting on top of
+            # the template it was stamped from.
+            if piece.row >= len(self.fretboard.strings) and piece in self.board_pieces:
+                self.board_pieces.remove(piece)
             self.drag_state["active"] = None
 
     def _step(self, sketch_ref):
@@ -476,11 +518,12 @@ class MainCanvas:
         if self.validation_enabled:
             draw_scale_highlights(sketch_ref, self.fretboard, self.scale_pitch_classes)
 
-        for piece in self.pieces:
-            invalid = (
-                self.validation_enabled
-                and not piece.in_tray
-                and not piece_fits_scale(piece, self.strings_by_row, self.grid_cols, self.scale_pitch_classes)
+        for piece in self.tray_pieces:
+            piece.draw(sketch_ref)
+
+        for piece in self.board_pieces:
+            invalid = self.validation_enabled and not piece_fits_scale(
+                piece, self.strings_by_row, self.grid_cols, self.scale_pitch_classes
             )
             piece.draw(sketch_ref, invalid=invalid)
 

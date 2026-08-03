@@ -86,7 +86,7 @@ def get_notes_for_string(
         ]
     elif accidental_type == AccidentalType.FLAT:
         first_index = CHROMATIC_SCALE_FLATS_WITH_OCTAVE.index(starting_note)
-        return CHROMATIC_SCALE_SHARPS_WITH_OCTAVE[
+        return CHROMATIC_SCALE_FLATS_WITH_OCTAVE[
             first_index : first_index + n_frets + 1
         ]
     else:
@@ -117,24 +117,38 @@ def semitone_distance(note_a: str, note_b: str) -> int:
 IONIAN_INTERVALS = [2, 2, 1, 2, 2, 2, 1]
 
 
-def get_scale_pitch_classes(root: str, intervals: list[int] = IONIAN_INTERVALS) -> set[str]:
-    """The pitch classes (no octave) of the scale built from `root` using
-    `intervals` (cumulative semitone steps, wrapping at the octave).
+_PITCH_CLASS_TO_SEMITONE = {
+    name: index
+    for scale in (CHROMATIC_SCALE_SHARPS, CHROMATIC_SCALE_FLATS)
+    for index, name in enumerate(scale)
+}
 
-    `root` must be a bare pitch class from CHROMATIC_SCALE_SHARPS (e.g.
-    "A", "C#") -- not an octave-qualified note like "A1".
+
+def pitch_class_semitone(note: str) -> int:
+    """The 0-11 semitone class of a note (octave-qualified like "A1"/"Db3"
+    or bare like "A"/"Db"), independent of whether it's spelled with
+    sharps or flats.
+
+    Scale-membership checks need this rather than a name comparison --
+    get_notes_for_string spells a fret's note using whichever
+    AccidentalType is currently selected, so "C#" and "Db" must compare
+    equal here even though they're different strings.
+    """
+    bare = note.rstrip("0123456789")
+    return _PITCH_CLASS_TO_SEMITONE[bare]
+
+
+def get_scale_pitch_classes(root: str, intervals: list[int] = IONIAN_INTERVALS) -> set[int]:
+    """The semitone classes (0-11, see pitch_class_semitone) of the scale
+    built from `root` using `intervals` (cumulative semitone steps,
+    wrapping at the octave).
+
+    `root` must be a bare pitch class (e.g. "A", "C#", "Db") -- not an
+    octave-qualified note like "A1".
     """
     cumulative = [0]
     for step in intervals[:-1]:
         cumulative.append(cumulative[-1] + step)
 
-    root_index = CHROMATIC_SCALE_SHARPS.index(root)
-    return {
-        CHROMATIC_SCALE_SHARPS[(root_index + semitones) % 12] for semitones in cumulative
-    }
-
-
-def pitch_class(note: str) -> str:
-    """Strip an octave-qualified note (e.g. "A1", "C#3") down to its bare
-    pitch class ("A", "C#") for scale-membership comparisons."""
-    return note.rstrip("0123456789")
+    root_semitone = pitch_class_semitone(root)
+    return {(root_semitone + semitones) % 12 for semitones in cumulative}

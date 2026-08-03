@@ -34,6 +34,7 @@ _MODE_A_ID = "control-mode-a"
 _MODE_B_ID = "control-mode-b"
 _KEY_ID = "control-key"
 _VALIDATE_TOGGLE_ID = "control-validate-toggle"
+_CLEAR_BOARD_ID = "control-clear-board"
 _EXPORT_PNG_ID = "control-export-png"
 _SAVE_STATE_ID = "control-save-state"
 _LOAD_STATE_ID = "control-load-state"
@@ -43,6 +44,7 @@ _save_state_callback = None
 _load_state_callback = None
 _visible_modes_change_callback = None
 _validator_change_callback = None
+_clear_board_callback = None
 
 
 def get_string_count() -> int:
@@ -128,6 +130,17 @@ def on_visible_modes_change(callback):
     _visible_modes_change_callback = callback
 
 
+def on_clear_board(callback):
+    """Register what happens when "Clear Board" is clicked.
+
+    Args:
+        callback: Zero-argument function. Should wipe whatever your code
+            considers "placed on the board", leaving tray contents alone.
+    """
+    global _clear_board_callback
+    _clear_board_callback = callback
+
+
 def on_export_png(callback):
     """Register what happens when "Export PNG" is clicked.
 
@@ -184,6 +197,11 @@ def _handle_validator_change(event):
         _validator_change_callback()
 
 
+def _handle_clear_board(event):
+    if _clear_board_callback is not None:
+        _clear_board_callback()
+
+
 def _handle_export_png(event):
     if _export_png_callback is not None:
         _export_png_callback()
@@ -218,6 +236,9 @@ def _bind():
 
     validate_toggle = js.document.getElementById(_VALIDATE_TOGGLE_ID)
     validate_toggle.addEventListener("change", create_proxy(_handle_validator_change))
+
+    clear_board_button = js.document.getElementById(_CLEAR_BOARD_ID)
+    clear_board_button.addEventListener("click", create_proxy(_handle_clear_board))
 
     export_button = js.document.getElementById(_EXPORT_PNG_ID)
     export_button.addEventListener("click", create_proxy(_handle_export_png))
