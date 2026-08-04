@@ -105,7 +105,9 @@ def _compute_gap_cells(cells):
 class Piece:
     """A draggable item living on a grid coordinate system."""
 
-    def __init__(self, cells, color, col, row):
+    def __init__(
+        self, cells, color, col, row, mode_name=None, shape_name=None, annotations=None, name=None
+    ):
         self.cells = cells
         self.gap_cells = _compute_gap_cells(cells)
         self.color = color
@@ -114,13 +116,50 @@ class Piece:
         self.dragging = False
         self.drag_offset_x = 0
         self.drag_offset_y = 0
+        # mode_name/shape_name identify which tray shape this piece came
+        # from (e.g. "Major"/"right") -- not needed to draw or drag a
+        # piece, but it's what Save State serializes instead of raw
+        # cells, so Load State can regenerate correct cells even if the
+        # tuning (and therefore string_interval) differs at load time.
+        self.mode_name = mode_name
+        self.shape_name = shape_name
+        # Per-cell metadata (finger assignments, text notes) -- unused
+        # today, but part of the Save/Load State schema up front since
+        # PLAN.md's fingering/annotate-mode feature will hang per-note
+        # data off of a placed piece and needs it in the same schema
+        # rather than bolted on after.
+        self.annotations = annotations if annotations is not None else {}
+        # None until the user right-clicks a board piece to rename it
+        # (see MainCanvas._try_rename_piece) -- display_name falls back
+        # to the shape's traditional name (e.g. "left", "zig") until
+        # then. Stacking the same tray shape multiple times otherwise
+        # gives every copy an identical, non-unique label, which is
+        # exactly what renaming is for.
+        self.name = name
+
+    @property
+    def display_name(self) -> str:
+        if self.name:
+            return self.name
+        if self.shape_name:
+            return self.shape_name
+        return "piece"
 
     def clone(self) -> "Piece":
         """A fresh, independent copy at the same position -- used to stamp
         a new board piece out of a tray template without disturbing the
         template itself (see MainCanvas._on_press: the template is an
         unlimited supply, not a single draggable instance)."""
-        return Piece(self.cells, self.color, self.col, self.row)
+        return Piece(
+            self.cells,
+            self.color,
+            self.col,
+            self.row,
+            self.mode_name,
+            self.shape_name,
+            dict(self.annotations),
+            self.name,
+        )
 
     def get_pixel_origin(self):
         x = FRETBOARD_BORDER_X + self.col * FRET_WIDTH
@@ -264,10 +303,19 @@ def build_pieces_for_mode(
     col = 1
     for shape in mode.shapes:
         cells = shape.resolve_cells(mode.intervals, string_interval)
-        pieces.append(Piece(cells, color, col, tray_row))
+        pieces.append(Piece(cells, color, col, tray_row, mode_name=mode.name, shape_name=shape.name))
         max_col_offset = max(c for c, _ in cells)
         col += max_col_offset + 2  # one empty column of gap between shapes
     return pieces
+
+
+def _find_shape(mode: "modes_module.Mode", shape_name: str) -> "modes_module.Shape | None":
+    """Look up one of `mode`'s shapes by name -- used to regenerate a
+    board piece's cells from Load State's (mode_name, shape_name) pair."""
+    for shape in mode.shapes:
+        if shape.name == shape_name:
+            return shape
+    return None
 
 
 _FRET_MARKER_RADIUS = 5
@@ -338,6 +386,43 @@ class MainCanvas:
         self.sketch.set_rect_mode("corner")
         self._fix_canvas_sharpness()
 
+        # All modes (not just the two currently visible trays) -- kept
+        # around so Load State can regenerate a piece whose mode_name
+        # isn't one of the two trays currently picked in the panel (e.g.
+        # a saved board included a Phrygian piece, but Tray A/B are
+        # currently Major/Minor).
+        self.all_modes_by_name = {
+            mode.name: mode for mode in modes_module.load_modes("modes.yaml")
+        }
+
+        self.board_pieces: list[Piece] = []
+        self.drag_state = {"active": None}
+
+        self._rebuild_from_controls()
+
+        self.sketch.get_mouse().on_button_press(self._on_press)
+        self.sketch.get_mouse().on_button_release(self._on_release)
+        self.sketch.on_step(self._step)
+        controls.on_visible_modes_change(self._rebuild_trays)
+        controls.on_validator_change(self._on_validator_change)
+        controls.on_clear_board(self._clear_board)
+        controls.on_save_state(self._serialize_state)
+        controls.on_load_state(self._load_state)
+
+    def _rebuild_from_controls(self):
+        """(Re-)derive every piece of state that depends on the control
+        panel's pickers -- fretboard, key/validator, trays -- from
+        whatever those pickers currently read.
+
+        Used both by __init__ (building for the first time) and by
+        _load_state (after Load State has pushed restored values into
+        the picker DOM elements, see controls.set_tuning() etc.) --
+        keeping this as one method means a restored save can't drift
+        from what a real page load would produce. Deliberately does not
+        touch board_pieces -- that's a separate list Load State
+        overwrites itself, and _clear_board()/stacking already rely on
+        it never being reset by a rebuild.
+        """
         # Note: controls.get_string_count() isn't read here -- build()
         # derives string count from len(tuning) directly, so a string
         # count that doesn't match the selected tuning's preset has no
@@ -398,8 +483,6 @@ class MainCanvas:
             for mode, tray in zip(self.modes, self.tetra_trays)
             for piece in build_pieces_for_mode(mode, tray, self.string_interval)
         ]
-        self.board_pieces: list[Piece] = []
-        self.drag_state = {"active": None}
 
         # +1: OpenString now builds fret_index 0 (open) through n_frets
         # inclusive -- see open_string.py's _build_frets/total_width.
@@ -407,12 +490,108 @@ class MainCanvas:
         bottom_tray = self.tetra_trays[-1]
         self.grid_rows = int((bottom_tray.y + bottom_tray.height - FRETBOARD_BORDER_Y) / FRET_HEIGHT)
 
-        self.sketch.get_mouse().on_button_press(self._on_press)
-        self.sketch.get_mouse().on_button_release(self._on_release)
-        self.sketch.on_step(self._step)
-        controls.on_visible_modes_change(self._rebuild_trays)
-        controls.on_validator_change(self._on_validator_change)
-        controls.on_clear_board(self._clear_board)
+    def _serialize_piece(self, piece: "Piece") -> dict:
+        return {
+            "mode_name": piece.mode_name,
+            "shape_name": piece.shape_name,
+            "col": piece.col,
+            "row": piece.row,
+            "annotations": piece.annotations,
+            "name": piece.name,
+        }
+
+    def _build_piece_from_state(self, entry: dict) -> "Piece | None":
+        """The inverse of _serialize_piece -- regenerates a board Piece's
+        cells from its (mode_name, shape_name) pair against the *current*
+        string_interval, rather than trusting raw cells from the save
+        file. This is what lets a save made under one tuning still
+        resolve to correct frets if loaded after switching tunings.
+        Silently drops any entry whose mode/shape no longer exists
+        (e.g. modes.yaml changed since the file was saved) rather than
+        failing the whole load.
+        """
+        mode = self.all_modes_by_name.get(entry.get("mode_name"))
+        if mode is None:
+            return None
+        shape = _find_shape(mode, entry.get("shape_name", ""))
+        if shape is None:
+            return None
+        cells = shape.resolve_cells(mode.intervals, self.string_interval)
+        return Piece(
+            cells,
+            _with_alpha(mode.color),
+            entry.get("col", 0),
+            entry.get("row", 0),
+            mode_name=mode.name,
+            shape_name=shape.name,
+            annotations=entry.get("annotations", {}),
+            name=entry.get("name"),
+        )
+
+    def _serialize_state(self) -> dict:
+        """Registered as the Save State callback -- see controls.on_save_state.
+
+        `version` is bumped whenever this shape changes incompatibly, so
+        a future _load_state can tell an old save apart from a new one
+        rather than guessing from which keys happen to be present.
+        """
+        return {
+            "version": 1,
+            "controls": {
+                "tuning": controls.get_tuning(),
+                "fret_count": self.n_frets,
+                "accidental_type": controls.get_accidental_type().name,
+                "visible_modes": controls.get_visible_modes(),
+                "key": self.key,
+                "validation_enabled": self.validation_enabled,
+            },
+            "board_pieces": [self._serialize_piece(piece) for piece in self.board_pieces],
+        }
+
+    def _load_state(self, data: dict):
+        """Registered as the Load State callback -- see controls.on_load_state.
+
+        Pushes each restored value into its picker's DOM element first
+        (so the panel actually reflects what got loaded, and so
+        get_tuning()/get_key()/etc keep agreeing with what's on screen),
+        then does one full _rebuild_from_controls() rather than relying
+        on each picker's own live-update callback (on_visible_modes_change
+        etc) to fire -- those are wired to real user `change` events,
+        which controls.set_*() deliberately doesn't dispatch, so this
+        would otherwise be a silent no-op.
+        """
+        control_settings = data.get("controls", {})
+
+        tuning = control_settings.get("tuning")
+        if tuning:
+            controls.set_tuning(tuning)
+
+        fret_count = control_settings.get("fret_count")
+        if fret_count:
+            controls.set_fret_count(fret_count)
+
+        accidental_type = control_settings.get("accidental_type")
+        if accidental_type:
+            controls.set_accidental_type(accidental_type)
+
+        visible_modes = control_settings.get("visible_modes")
+        if visible_modes and len(visible_modes) == 2:
+            controls.set_visible_modes(*visible_modes)
+
+        key = control_settings.get("key")
+        if key:
+            controls.set_key(key)
+
+        if "validation_enabled" in control_settings:
+            controls.set_validation_enabled(control_settings["validation_enabled"])
+
+        self._rebuild_from_controls()
+
+        self.board_pieces = [
+            piece
+            for entry in data.get("board_pieces", [])
+            if (piece := self._build_piece_from_state(entry)) is not None
+        ]
 
     def _clear_board(self):
         """Wipe every piece placed on the board, leaving the tray
@@ -459,10 +638,33 @@ class MainCanvas:
         piece.drag_offset_y = py - y
         self.drag_state["active"] = piece
 
+    def _try_rename_piece(self, px, py):
+        """Right-click a board piece to rename it via a native prompt().
+
+        Only board_pieces are renameable, not tray templates -- a tray
+        shape's name ("Major straight") is already unique within its
+        tray by construction; it's stacking the *same* shape onto the
+        board more than once that produces indistinguishable copies,
+        which is what this is for (see Piece.display_name). Prompt is
+        pre-filled with the current display name so confirming with no
+        changes is a no-op, and clearing the field reverts to the
+        auto-generated "<mode> <shape>" name rather than storing "".
+        """
+        for piece in reversed(self.board_pieces):
+            if piece.contains_point(px, py):
+                new_name = js.window.prompt("Rename this shape:", piece.display_name)
+                if new_name is not None:
+                    piece.name = new_name.strip() or None
+                return
+
     def _on_press(self, button):
         mouse = self.sketch.get_mouse()
         px = mouse.get_pointer_x()
         py = mouse.get_pointer_y()
+
+        if button.get_name() == sketchingpy.const.MOUSE_RIGHT_BUTTON:
+            self._try_rename_piece(px, py)
+            return
 
         # Board pieces take priority (topmost/most-recently-placed first)
         # so an already-placed piece can be picked back up and moved.

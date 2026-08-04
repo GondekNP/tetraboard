@@ -87,6 +87,54 @@ def get_visible_modes() -> list[str]:
     return [mode_a, mode_b]
 
 
+def set_string_count(value: int) -> None:
+    """Set the string count picker (used when restoring Load State)."""
+    js.document.getElementById(_STRING_COUNT_ID).value = str(value)
+
+
+def set_tuning(notes: list[str]) -> None:
+    """Set the tuning picker to whichever preset's value matches `notes`
+    exactly (same note-list format get_tuning() returns). If none of the
+    <option>s match, the picker silently keeps its prior selection --
+    same "must match a real TUNINGS preset" assumption main.py's
+    _resolve_tuning() already enforces on read.
+    """
+    js.document.getElementById(_TUNING_ID).value = ",".join(notes)
+
+
+def set_fret_count(value: int) -> None:
+    """Set the fret count picker (used when restoring Load State)."""
+    js.document.getElementById(_FRET_COUNT_ID).value = str(value)
+
+
+def set_accidental_type(value: str) -> None:
+    """Set the sharps/flats picker from an AccidentalType member's name
+    (e.g. "SHARP", "FLAT") -- used when restoring Load State."""
+    js.document.getElementById(_ACCIDENTAL_TYPE_ID).value = value
+
+
+def set_visible_modes(mode_a: str, mode_b: str) -> None:
+    """Set both mode tray pickers (used when restoring Load State).
+
+    Sets the DOM value directly without dispatching a `change` event --
+    main.py's load-state path calls its own rebuild once after restoring
+    every control, rather than relying on on_visible_modes_change's
+    live-update path firing mid-restore.
+    """
+    js.document.getElementById(_MODE_A_ID).value = mode_a
+    js.document.getElementById(_MODE_B_ID).value = mode_b
+
+
+def set_key(value: str) -> None:
+    """Set the Key picker (used when restoring Load State)."""
+    js.document.getElementById(_KEY_ID).value = value
+
+
+def set_validation_enabled(value: bool) -> None:
+    """Set the Validate checkbox (used when restoring Load State)."""
+    js.document.getElementById(_VALIDATE_TOGGLE_ID).checked = bool(value)
+
+
 def get_key() -> str:
     """Read the currently selected key (a bare pitch class, e.g. "A", "C#") --
     the root the validator builds its Ionian scale from."""
@@ -207,11 +255,22 @@ def _handle_export_png(event):
         _export_png_callback()
 
 
+_DEFAULT_SAVE_STATE_FILENAME = "tetraboard-state.json"
+
+
 def _handle_save_state(event):
     if _save_state_callback is None:
         return
     state = _save_state_callback()
-    _download_text(json.dumps(state), "tetraboard-state.json", "application/json")
+
+    filename = js.window.prompt("Save as:", _DEFAULT_SAVE_STATE_FILENAME)
+    if filename is None:
+        return  # user hit Cancel -- no download
+    filename = filename.strip() or _DEFAULT_SAVE_STATE_FILENAME
+    if not filename.endswith(".json"):
+        filename += ".json"
+
+    _download_text(json.dumps(state), filename, "application/json")
 
 
 async def _handle_load_state(event):
