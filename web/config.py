@@ -152,3 +152,30 @@ def get_scale_pitch_classes(root: str, intervals: list[int] = IONIAN_INTERVALS) 
 
     root_semitone = pitch_class_semitone(root)
     return {(root_semitone + semitones) % 12 for semitones in cumulative}
+
+
+def get_scale_degree(
+    root: str, note: str, intervals: list[int] = IONIAN_INTERVALS
+) -> int | None:
+    """`note`'s 1-indexed scale degree (1-7) in the scale built from `root`,
+    or None if `note` isn't a member of that scale at all.
+
+    Same cumulative-semitone construction as get_scale_pitch_classes, but
+    keeping the degree position instead of collapsing to a bare set --
+    used by the Interval export view (main.py's _export_png) to label each
+    note by its degree rather than its letter name. Plain 1-7, wrapping at
+    the octave -- no compound (9th/11th/13th) numbering.
+
+    `root` is a bare pitch class like get_scale_pitch_classes; `note` may
+    be octave-qualified (e.g. "A1") or bare, same as pitch_class_semitone.
+    """
+    cumulative = [0]
+    for step in intervals[:-1]:
+        cumulative.append(cumulative[-1] + step)
+
+    root_semitone = pitch_class_semitone(root)
+    degrees_by_semitone = {
+        (root_semitone + semitones) % 12: degree
+        for degree, semitones in enumerate(cumulative, start=1)
+    }
+    return degrees_by_semitone.get(pitch_class_semitone(note))

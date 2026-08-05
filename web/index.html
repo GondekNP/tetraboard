@@ -15,6 +15,18 @@
                responsive sizing here, re-check click alignment. */
             body { margin: 0; background: #202020; color: #EEEEEE; font-family: sans-serif; }
             #sketch-canvas { display: block; margin: 0 auto; }
+            /* The canvas needs tabindex="0" to be focusable at all (so it
+               can receive keydown events -- sketchingpy's keyboard listener
+               binds directly to this element), but that attribute can't
+               just be set here: devreload.py's hot-reload swaps in a brand
+               new <canvas> node on every reload, carrying over only `id`
+               (see its _fresh_canvas()), which would silently drop it.
+               main.py sets it in code instead (MainCanvas.__init__), which
+               reruns on every reload too. This rule just suppresses the
+               resulting focus ring either way -- the annotate-mode
+               selection highlight (drawn on canvas) is the actual focus
+               indicator here. */
+            #sketch-canvas:focus { outline: none; }
 
             /* Plain-HTML control panel -- see web/controls.py. Sketchingpy
                has no widget/dropdown abstraction of its own (confirmed
@@ -38,6 +50,7 @@
             #control-panel label { font-size: 14px; color: #AAAAAA; }
             #control-panel select,
             #control-panel button,
+            #control-panel input[type="text"],
             #control-panel input[type="file"]::file-selector-button {
                 background: #2A2A2E;
                 color: #EEEEEE;
@@ -79,17 +92,6 @@
              what a Fret/String/Fretboard is. Your canvas code registers
              what these controls should actually do -- see DEVELOPING.md. -->
         <div id="control-panel">
-            <div class="control-group">
-                <label for="control-string-count">Strings</label>
-                <select id="control-string-count">
-                    <option value="4">4</option>
-                    <option value="5">5</option>
-                    <option value="6" selected>6</option>
-                    <option value="7">7</option>
-                    <option value="8">8</option>
-                </select>
-            </div>
-
             <div class="control-group">
                 <label for="control-tuning">Tuning</label>
                 <select id="control-tuning">
@@ -159,9 +161,22 @@
 
             <div class="control-group">
                 <button id="control-clear-board" type="button">Clear Board</button>
+                <label for="control-annotate-toggle">Annotate</label>
+                <input type="checkbox" id="control-annotate-toggle">
             </div>
 
             <div class="control-group">
+                <label for="control-pattern-name">Pattern name</label>
+                <input type="text" id="control-pattern-name" placeholder="tetraboard-export" style="width: 160px;">
+            </div>
+
+            <div class="control-group">
+                <label for="control-export-view">Export view</label>
+                <select id="control-export-view">
+                    <option value="vanilla" selected>Note name</option>
+                    <option value="interval">Interval</option>
+                    <option value="fingering">Fingering</option>
+                </select>
                 <button id="control-export-png" type="button">Export PNG</button>
             </div>
 

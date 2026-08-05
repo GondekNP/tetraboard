@@ -47,14 +47,13 @@ class Fretboard:
 @dataclass
 class FretboardBuilder:
     """A fluent builder for Fretboard -- this is where controls.py's
-    get_string_count()/get_tuning()/get_fret_count() are meant to plug in
-    once you're ready (see DEVELOPING.md's "portal" section)."""
+    get_tuning()/get_fret_count() are meant to plug in once you're ready
+    (see DEVELOPING.md's "portal" section)."""
 
     canvas_pos_x: int = 0
     canvas_pos_y: int = 0
     tuning: TUNINGS = TUNINGS.STANDARD_6
     n_frets: int = 24
-    n_strings: int = 6
     accidental_type: AccidentalType = AccidentalType.SHARP
     strings: list[OpenString] = field(default_factory=list)
 
@@ -73,12 +72,6 @@ class FretboardBuilder:
         if not isinstance(n_frets, int) or n_frets <= 0:
             raise ValueError(f"n_frets must be a positive integer, got {n_frets!r}")
         self.n_frets = n_frets
-        return self
-
-    def set_n_strings(self, n_strings: int) -> "FretboardBuilder":
-        if not isinstance(n_strings, int) or n_strings <= 0:
-            raise ValueError(f"n_strings must be a positive integer, got {n_strings!r}")
-        self.n_strings = n_strings
         return self
 
     def set_accidental_type(

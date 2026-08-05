@@ -2,8 +2,7 @@
 
 This is the portal between the plain-HTML control panel in index.html and
 whatever sketchingpy object graph main.py builds. It owns:
-  * reading the current picker selections (string count, tuning, fret
-    count, sharps/flats)
+  * reading the current picker selections (tuning, fret count, sharps/flats)
   * wiring the Export PNG / Save State / Load State controls to callbacks
     your own code registers
 
@@ -26,7 +25,6 @@ from pyodide.ffi import create_proxy
 
 from config import AccidentalType
 
-_STRING_COUNT_ID = "control-string-count"
 _TUNING_ID = "control-tuning"
 _FRET_COUNT_ID = "control-fret-count"
 _ACCIDENTAL_TYPE_ID = "control-accidental-type"
@@ -35,6 +33,9 @@ _MODE_B_ID = "control-mode-b"
 _KEY_ID = "control-key"
 _VALIDATE_TOGGLE_ID = "control-validate-toggle"
 _CLEAR_BOARD_ID = "control-clear-board"
+_PATTERN_NAME_ID = "control-pattern-name"
+_EXPORT_VIEW_ID = "control-export-view"
+_ANNOTATE_TOGGLE_ID = "control-annotate-toggle"
 _EXPORT_PNG_ID = "control-export-png"
 _SAVE_STATE_ID = "control-save-state"
 _LOAD_STATE_ID = "control-load-state"
@@ -45,12 +46,9 @@ _load_state_callback = None
 _visible_modes_change_callback = None
 _validator_change_callback = None
 _clear_board_callback = None
-
-
-def get_string_count() -> int:
-    """Read the currently selected string count."""
-    element = js.document.getElementById(_STRING_COUNT_ID)
-    return int(element.value)
+_tuning_change_callback = None
+_accidental_type_change_callback = None
+_annotate_toggle_callback = None
 
 
 def get_tuning() -> list[str]:
@@ -85,11 +83,6 @@ def get_visible_modes() -> list[str]:
     mode_a = js.document.getElementById(_MODE_A_ID).value
     mode_b = js.document.getElementById(_MODE_B_ID).value
     return [mode_a, mode_b]
-
-
-def set_string_count(value: int) -> None:
-    """Set the string count picker (used when restoring Load State)."""
-    js.document.getElementById(_STRING_COUNT_ID).value = str(value)
 
 
 def set_tuning(notes: list[str]) -> None:
@@ -149,6 +142,32 @@ def is_validation_enabled() -> bool:
     return bool(element.checked)
 
 
+def get_pattern_name() -> str:
+    """Read the pattern-name text field: a one-time name for the current
+    board, reused as the export filename's stem (with a per-view suffix
+    appended, e.g. "_intervals") so the user isn't retyping a filename on
+    every export click -- see main.py's _export_png."""
+    element = js.document.getElementById(_PATTERN_NAME_ID)
+    return element.value
+
+
+def get_export_view() -> str:
+    """Read the currently selected export label mode: "vanilla" (note
+    name), "interval" (scale degree), or "fingering" (assigned finger
+    number) -- see main.py's _export_png for where this actually changes
+    what gets drawn."""
+    element = js.document.getElementById(_EXPORT_VIEW_ID)
+    return element.value
+
+
+def is_annotate_enabled() -> bool:
+    """Read the Annotate checkbox: whether a left-click on a board piece
+    should open the finger/note-assignment prompt instead of picking the
+    piece up to drag (see MainCanvas._on_press / _try_annotate_piece)."""
+    element = js.document.getElementById(_ANNOTATE_TOGGLE_ID)
+    return bool(element.checked)
+
+
 def on_validator_change(callback):
     """Register what happens when the Key picker or Validate checkbox
     changes. Fires live, same reasoning as on_visible_modes_change --
@@ -176,6 +195,58 @@ def on_visible_modes_change(callback):
     """
     global _visible_modes_change_callback
     _visible_modes_change_callback = callback
+
+
+def on_tuning_change(callback):
+    """Register what happens when the Tuning picker changes.
+
+    Fires live, same reasoning as on_visible_modes_change -- a tuning
+    switch that silently does nothing until reload would just look
+    broken. Unlike Key/Validate/Mode changes, a new tuning can change
+    the fretboard's string count, which can strand board pieces on rows
+    that no longer exist -- so this is expected to clear the board as
+    part of handling the change, not just rebuild in place.
+
+    Args:
+        callback: Zero-argument function. Call get_tuning() again inside
+            it to see the new selection.
+    """
+    global _tuning_change_callback
+    _tuning_change_callback = callback
+
+
+def on_accidental_type_change(callback):
+    """Register what happens when the sharps/flats picker changes.
+
+    Fires live, same reasoning as on_validator_change -- flipping this
+    silently doing nothing until some *other* control triggers a rebuild
+    (e.g. Tuning) looked broken. Doesn't change string count or fret
+    count, so unlike on_tuning_change there's no reason to clear the
+    board here -- just re-derive fret note names in place.
+
+    Args:
+        callback: Zero-argument function. Call get_accidental_type()
+            again inside it to see the new selection.
+    """
+    global _accidental_type_change_callback
+    _accidental_type_change_callback = callback
+
+
+def on_annotate_toggle(callback):
+    """Register what happens when the Annotate checkbox changes (either
+    direction).
+
+    Fires live, unlike is_annotate_enabled() itself (read on demand,
+    since it only changes click behavior) -- needed so main.py can drop
+    its in-progress cell selection the moment Annotate is toggled either
+    way, rather than leaving a stale selection highlighted once it no
+    longer means anything.
+
+    Args:
+        callback: Zero-argument function.
+    """
+    global _annotate_toggle_callback
+    _annotate_toggle_callback = callback
 
 
 def on_clear_board(callback):
@@ -245,9 +316,24 @@ def _handle_validator_change(event):
         _validator_change_callback()
 
 
+def _handle_tuning_change(event):
+    if _tuning_change_callback is not None:
+        _tuning_change_callback()
+
+
+def _handle_accidental_type_change(event):
+    if _accidental_type_change_callback is not None:
+        _accidental_type_change_callback()
+
+
 def _handle_clear_board(event):
     if _clear_board_callback is not None:
         _clear_board_callback()
+
+
+def _handle_annotate_toggle(event):
+    if _annotate_toggle_callback is not None:
+        _annotate_toggle_callback()
 
 
 def _handle_export_png(event):
@@ -296,8 +382,17 @@ def _bind():
     validate_toggle = js.document.getElementById(_VALIDATE_TOGGLE_ID)
     validate_toggle.addEventListener("change", create_proxy(_handle_validator_change))
 
+    tuning_select = js.document.getElementById(_TUNING_ID)
+    tuning_select.addEventListener("change", create_proxy(_handle_tuning_change))
+
+    accidental_type_select = js.document.getElementById(_ACCIDENTAL_TYPE_ID)
+    accidental_type_select.addEventListener("change", create_proxy(_handle_accidental_type_change))
+
     clear_board_button = js.document.getElementById(_CLEAR_BOARD_ID)
     clear_board_button.addEventListener("click", create_proxy(_handle_clear_board))
+
+    annotate_toggle = js.document.getElementById(_ANNOTATE_TOGGLE_ID)
+    annotate_toggle.addEventListener("change", create_proxy(_handle_annotate_toggle))
 
     export_button = js.document.getElementById(_EXPORT_PNG_ID)
     export_button.addEventListener("click", create_proxy(_handle_export_png))
