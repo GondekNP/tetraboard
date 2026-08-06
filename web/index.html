@@ -74,6 +74,7 @@
                 {"files": [
                     "./config.py",
                     "./controls.py",
+                    "./export_style.py",
                     "./fret.py",
                     "./open_string.py",
                     "./fretboard.py",
@@ -154,6 +155,16 @@
                     <option value="A" selected>A</option>
                     <option value="A#">A#</option>
                     <option value="B">B</option>
+                </select>
+                <label for="control-key-mode">Mode</label>
+                <select id="control-key-mode">
+                    <option value="Ionian" selected>Ionian</option>
+                    <option value="Dorian">Dorian</option>
+                    <option value="Phrygian">Phrygian</option>
+                    <option value="Lydian">Lydian</option>
+                    <option value="Mixolydian">Mixolydian</option>
+                    <option value="Aeolian">Aeolian</option>
+                    <option value="Locrian">Locrian</option>
                 </select>
                 <label for="control-validate-toggle">Validate</label>
                 <input type="checkbox" id="control-validate-toggle">

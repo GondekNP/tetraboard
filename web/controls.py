@@ -21,9 +21,8 @@ import json
 import urllib.parse
 
 import js
-from pyodide.ffi import create_proxy
-
 from config import AccidentalType
+from pyodide.ffi import create_proxy
 
 _TUNING_ID = "control-tuning"
 _FRET_COUNT_ID = "control-fret-count"
@@ -31,6 +30,7 @@ _ACCIDENTAL_TYPE_ID = "control-accidental-type"
 _MODE_A_ID = "control-mode-a"
 _MODE_B_ID = "control-mode-b"
 _KEY_ID = "control-key"
+_KEY_MODE_ID = "control-key-mode"
 _VALIDATE_TOGGLE_ID = "control-validate-toggle"
 _CLEAR_BOARD_ID = "control-clear-board"
 _PATTERN_NAME_ID = "control-pattern-name"
@@ -135,6 +135,20 @@ def get_key() -> str:
     return element.value
 
 
+def get_key_mode() -> str:
+    """Read the currently selected key mode (e.g. "Ionian", "Dorian") --
+    which of the seven diatonic rotations the validator/interval-degree
+    math should build from config.MODE_INTERVALS, alongside get_key()'s
+    root. Previously this was implicitly always Ionian."""
+    element = js.document.getElementById(_KEY_MODE_ID)
+    return element.value
+
+
+def set_key_mode(value: str) -> None:
+    """Set the Key Mode picker (used when restoring Load State)."""
+    js.document.getElementById(_KEY_MODE_ID).value = value
+
+
 def is_validation_enabled() -> bool:
     """Read the Validate checkbox: whether dropped pieces should be checked
     against the current key's scale."""
@@ -169,13 +183,13 @@ def is_annotate_enabled() -> bool:
 
 
 def on_validator_change(callback):
-    """Register what happens when the Key picker or Validate checkbox
-    changes. Fires live, same reasoning as on_visible_modes_change --
-    picking a new key or flipping the toggle should update immediately,
-    not wait for a reload.
+    """Register what happens when the Key picker, Key Mode picker, or
+    Validate checkbox changes. Fires live, same reasoning as
+    on_visible_modes_change -- picking a new key/mode or flipping the
+    toggle should update immediately, not wait for a reload.
 
     Args:
-        callback: Zero-argument function. Call get_key()/
+        callback: Zero-argument function. Call get_key()/get_key_mode()/
             is_validation_enabled() again inside it to see the new values.
     """
     global _validator_change_callback
@@ -378,6 +392,9 @@ def _bind():
 
     key_select = js.document.getElementById(_KEY_ID)
     key_select.addEventListener("change", create_proxy(_handle_validator_change))
+
+    key_mode_select = js.document.getElementById(_KEY_MODE_ID)
+    key_mode_select.addEventListener("change", create_proxy(_handle_validator_change))
 
     validate_toggle = js.document.getElementById(_VALIDATE_TOGGLE_ID)
     validate_toggle.addEventListener("change", create_proxy(_handle_validator_change))

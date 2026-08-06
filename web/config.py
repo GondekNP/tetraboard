@@ -104,17 +104,37 @@ def semitone_distance(note_a: str, note_b: str) -> int:
     ) - CHROMATIC_SCALE_SHARPS_WITH_OCTAVE.index(note_a)
 
 
-# Ionian (major scale) whole/half step pattern -- the "parent scale" the
-# validator checks against. Every mode tray (Major/Minor/Phrygian/Lydian)
-# is, by construction, a tetrachord lifted straight from some mode of this
-# same parent scale (Major = Ionian's own lower tetrachord rooted on the
-# key; Lydian's tetrachord is the Ionian pattern's own 4th-degree
-# tetrachord; etc) -- so the *pitch classes* valid for any of them, in a
-# given key, are always exactly this one 7-note set. That's what makes the
-# "simple" validation approach simple: don't bother deriving a different
-# scale per mode, just check every dropped piece's notes against this one
-# key's Ionian pitch-class set, regardless of which tray it came from.
+# Ionian (major scale) whole/half step pattern -- kept as the default
+# "parent scale" intervals for callers that don't care which mode (e.g. a
+# bare get_scale_pitch_classes(root) call). Every mode tray
+# (Major/Minor/Phrygian/Lydian) is, by construction, a tetrachord lifted
+# straight from some mode of a diatonic parent scale (Major = Ionian's own
+# lower tetrachord rooted on the key; Lydian's tetrachord is the Ionian
+# pattern's own 4th-degree tetrachord; etc) -- so the *pitch classes* valid
+# for any of them, in a given key, are always exactly one 7-note set. Which
+# set depends on the selected Key Mode (see MODE_INTERVALS below) -- the
+# validator/interval-degree math is otherwise identical regardless of mode,
+# just built from different intervals.
 IONIAN_INTERVALS = [2, 2, 1, 2, 2, 2, 1]
+
+# All seven rotations of the same diatonic whole/half-step pattern, each
+# starting from a different scale degree -- what the Key Mode picker
+# offers (main.py._KEY_ID's sibling _KEY_MODE_ID). Previously the
+# validator/interval-degree math always assumed Ionian regardless of what
+# was actually being played, which silently produced the wrong pitch-class
+# set for anything not built from a major scale (e.g. two Minor-tray
+# tetrachords stacked on a shared root are a Dorian- or Aeolian-flavored
+# pattern, not Ionian) -- picking the matching mode here makes that
+# deterministic instead of inferred.
+MODE_INTERVALS: dict[str, list[int]] = {
+    "Ionian": IONIAN_INTERVALS,
+    "Dorian": [2, 1, 2, 2, 2, 1, 2],
+    "Phrygian": [1, 2, 2, 2, 1, 2, 2],
+    "Lydian": [2, 2, 2, 1, 2, 2, 1],
+    "Mixolydian": [2, 2, 1, 2, 2, 1, 2],
+    "Aeolian": [2, 1, 2, 2, 1, 2, 2],
+    "Locrian": [1, 2, 2, 1, 2, 2, 2],
+}
 
 
 _PITCH_CLASS_TO_SEMITONE = {
