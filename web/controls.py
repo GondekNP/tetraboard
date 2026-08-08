@@ -35,12 +35,17 @@ _VALIDATE_TOGGLE_ID = "control-validate-toggle"
 _CLEAR_BOARD_ID = "control-clear-board"
 _PATTERN_NAME_ID = "control-pattern-name"
 _EXPORT_VIEW_ID = "control-export-view"
+_PLAYED_ONLY_ID = "control-played-only"
 _ANNOTATE_TOGGLE_ID = "control-annotate-toggle"
 _EXPORT_PNG_ID = "control-export-png"
+_EXPORT_FOLDER_ID = "control-export-folder"
 _SAVE_STATE_ID = "control-save-state"
 _LOAD_STATE_ID = "control-load-state"
 
+_DEFAULT_EXPORT_FOLDER_LABEL = "Set export folder…"
+
 _export_png_callback = None
+_set_export_folder_callback = None
 _save_state_callback = None
 _load_state_callback = None
 _visible_modes_change_callback = None
@@ -174,12 +179,39 @@ def get_export_view() -> str:
     return element.value
 
 
+def get_played_only() -> bool:
+    """Read the "Played only" export checkbox.
+
+    When checked, a note without an assigned fingering should render
+    de-emphasized on export (see MainCanvas._export_png) -- a fingering
+    is this app's only signal for "this note is actually used in this
+    take", as opposed to just being part of the underlying tetrachord
+    shape a piece represents.
+    """
+    element = js.document.getElementById(_PLAYED_ONLY_ID)
+    return bool(element.checked)
+
+
 def is_annotate_enabled() -> bool:
     """Read the Annotate checkbox: whether a left-click on a board piece
     should open the finger/note-assignment prompt instead of picking the
     piece up to drag (see MainCanvas._on_press / _try_annotate_piece)."""
     element = js.document.getElementById(_ANNOTATE_TOGGLE_ID)
     return bool(element.checked)
+
+
+def toggle_annotate() -> None:
+    """Flip the Annotate checkbox programmatically (see MainCanvas.
+    _on_key_press's Shift hotkey) and fire the same live callback a real
+    click's "change" event would -- setting `.checked` directly doesn't
+    dispatch that event on its own, so the on_annotate_toggle listener
+    has to be invoked here explicitly instead of relying on the browser
+    to notice the change.
+    """
+    element = js.document.getElementById(_ANNOTATE_TOGGLE_ID)
+    element.checked = not element.checked
+    if _annotate_toggle_callback is not None:
+        _annotate_toggle_callback()
 
 
 def on_validator_change(callback):
@@ -278,12 +310,44 @@ def on_export_png(callback):
     """Register what happens when "Export PNG" is clicked.
 
     Args:
-        callback: Zero-argument function. Do whatever you need with your
-            live sketch to export it, e.g. `sketch.save_image("fretboard.png")`
-            (see TUTORIAL.md section 7 for what that does and does not do).
+        callback: Zero-argument function, or coroutine function -- it's
+            awaited (see _handle_export_png) so it can use a native
+            "Save As" dialog, which doesn't resolve until the user
+            responds to it. Do whatever you need with your live sketch to
+            export it, e.g. `sketch.save_image("fretboard.png")` (see
+            TUTORIAL.md section 7 for what that does and does not do).
     """
     global _export_png_callback
     _export_png_callback = callback
+
+
+def on_set_export_folder(callback):
+    """Register what happens when "Set export folder…" is clicked.
+
+    Args:
+        callback: Zero-argument coroutine function -- it's awaited (see
+            _handle_set_export_folder), same as on_export_png's, since
+            picking a folder means awaiting a native directory-picker
+            dialog. Whatever it does should end with
+            set_export_folder_label(...) if it succeeds, so the button
+            reflects the chosen folder.
+    """
+    global _set_export_folder_callback
+    _set_export_folder_callback = callback
+
+
+def set_export_folder_label(folder_name: str) -> None:
+    """Update the "Set export folder…" button to show the current choice.
+
+    Called by whatever on_set_export_folder's callback does, both right
+    after the user picks a folder and at startup if a previous session's
+    choice was successfully restored -- this is the only user-visible
+    sign of which one (if any) is currently remembered, since exporting
+    into it happens with no dialog at all.
+    """
+    button = js.document.getElementById(_EXPORT_FOLDER_ID)
+    if button is not None:
+        button.textContent = f"Export folder: {folder_name}"
 
 
 def on_save_state(callback):
@@ -350,9 +414,14 @@ def _handle_annotate_toggle(event):
         _annotate_toggle_callback()
 
 
-def _handle_export_png(event):
+async def _handle_export_png(event):
     if _export_png_callback is not None:
-        _export_png_callback()
+        await _export_png_callback()
+
+
+async def _handle_set_export_folder(event):
+    if _set_export_folder_callback is not None:
+        await _set_export_folder_callback()
 
 
 _DEFAULT_SAVE_STATE_FILENAME = "tetraboard-state.json"
@@ -413,6 +482,17 @@ def _bind():
 
     export_button = js.document.getElementById(_EXPORT_PNG_ID)
     export_button.addEventListener("click", create_proxy(_handle_export_png))
+
+    # Only wired up (and left visible) where the File System Access
+    # API's directory picker actually exists -- Firefox/Safari have no
+    # equivalent as of this writing, and a button that always throws the
+    # moment it's clicked is worse than no button at all.
+    export_folder_button = js.document.getElementById(_EXPORT_FOLDER_ID)
+    if hasattr(js.window, "showDirectoryPicker"):
+        export_folder_button.textContent = _DEFAULT_EXPORT_FOLDER_LABEL
+        export_folder_button.addEventListener("click", create_proxy(_handle_set_export_folder))
+    else:
+        export_folder_button.style.display = "none"
 
     save_button = js.document.getElementById(_SAVE_STATE_ID)
     save_button.addEventListener("click", create_proxy(_handle_save_state))

@@ -63,6 +63,29 @@ EXPORT_ACCIDENTAL_STRIPE_WEIGHT = 3
 EXPORT_NOTE_OUTLINE_COLOR = "#000000"
 EXPORT_NOTE_OUTLINE_WEIGHT = 2
 
+# "Played only" export option (see MainCanvas._export_png/controls.
+# get_played_only): a note that isn't played (see Piece.is_played --
+# no fingering *and* not explicitly right-click-marked played) gets its
+# badge fill, outline, accidental hatch, and label all swapped for
+# these flat, opaque colors instead of drawn at full strength. This
+# used to be done with alpha transparency instead of a distinct solid
+# color, which reads fine in isolation but -- per direct user feedback
+# -- badly on an actual pattern: since the badge sits *on top of* the
+# footprint/pipe shading (see EXPORT_FOOTPRINT_FILL_COLOR), a
+# translucent badge lets that gray pipe bleed straight through it,
+# muddying the fill into something hard to tell apart from a played
+# note's own gray. A flat opaque color has no such blending -- it
+# simply overwrites the pipe the same way every other badge already
+# does, and reads as unambiguously lighter than a played note's own
+# fill/outline/label at a glance. Label color needs to go dark instead
+# of white here specifically because the fill itself is now light,
+# not because "faded" implies it -- white-on-light-gray would be
+# unreadable.
+EXPORT_UNPLAYED_FILL_COLOR = "#E5E5E5"
+EXPORT_UNPLAYED_OUTLINE_COLOR = "#BFBFBF"
+EXPORT_UNPLAYED_STRIPE_COLOR = "#BFBFBF"
+EXPORT_UNPLAYED_LABEL_COLOR = "#A0A0A0"
+
 # The "pipe" -- every cell that's part of some placed piece's footprint (a
 # real note *or* a skipped-fret gap) gets this background. Darker than a
 # faint tint so the connectivity it shows reads clearly at print scale, but
@@ -138,3 +161,14 @@ EXPORT_TEXT_WIDTH_FACTOR = 0.6
 EXPORT_NUT_COLOR = "#000000"
 EXPORT_NUT_WIDTH = 8
 EXPORT_NUT_OVERHANG = 8
+
+# The exported PNG is cropped to just this content -- the pattern's own
+# grid plus its markers/labels -- instead of the full interactive canvas
+# (which includes both mode trays and would otherwise dwarf a small
+# pattern in a sea of blank space). This is the padding kept around that
+# content on every side, since there's no text-measurement API (see
+# EXPORT_TEXT_WIDTH_FACTOR above) to compute the string labels' and nut's
+# exact pixel extent -- generous enough to never clip a label, at the
+# cost of a small, deliberately unused margin rather than a razor-tight
+# crop that risks cutting something off.
+EXPORT_CANVAS_PADDING = 30

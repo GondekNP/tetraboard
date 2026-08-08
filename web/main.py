@@ -17,6 +17,8 @@ PyScript/Pyodide in the browser. Edit, save: devreload.py hot-swaps it
 in place, no manual refresh or Pyodide reboot needed.
 """
 
+import asyncio
+
 import controls
 import js
 import modes as modes_module
@@ -44,6 +46,7 @@ from export_style import (
     EXPORT_ACCIDENTAL_STRIPE_COLOR,
     EXPORT_ACCIDENTAL_STRIPE_SPACING,
     EXPORT_ACCIDENTAL_STRIPE_WEIGHT,
+    EXPORT_CANVAS_PADDING,
     EXPORT_CELL_BORDER_COLOR,
     EXPORT_CELL_BORDER_WEIGHT,
     EXPORT_CELL_FILL_COLOR,
@@ -70,9 +73,14 @@ from export_style import (
     EXPORT_STRING_LABEL_MARGIN,
     EXPORT_STRING_LABEL_OUTLINE_COLOR,
     EXPORT_TEXT_WIDTH_FACTOR,
+    EXPORT_UNPLAYED_FILL_COLOR,
+    EXPORT_UNPLAYED_LABEL_COLOR,
+    EXPORT_UNPLAYED_OUTLINE_COLOR,
+    EXPORT_UNPLAYED_STRIPE_COLOR,
 )
 from fretboard import TUNINGS, FretboardBuilder
 from open_string import OpenString
+from pyodide.ffi import JsException, create_proxy, to_js
 
 
 def _resolve_tuning(notes: list[str]) -> TUNINGS:
@@ -153,6 +161,13 @@ _FINGER_BADGE_SIZE = 22
 # technique as draw_connection's glyph outlines.
 _FINGER_BADGE_OUTLINE_COLOR = "#FFFFFF"
 _FINGER_BADGE_OUTLINE_EXTRA = 3
+# The played marker (see Piece.is_played) sits in the opposite corner
+# from the finger badge (top-left, not bottom-right) so a note can show
+# both without overlapping -- same dark-fill/white-halo styling as that
+# badge, just a circle instead of a triangle, since there's no letter to
+# fit inside it.
+_PLAYED_MARKER_RADIUS = 6
+_PLAYED_MARKER_OUTLINE_EXTRA = 3
 _SELECTION_OUTLINE_COLOR = "#FBBF24"
 _SELECTION_OUTLINE_WEIGHT = 3
 _CONNECTION_COLOR = "#F472B6"
@@ -285,6 +300,7 @@ class Piece:
         annotations=None,
         name=None,
         is_accidental=False,
+        played=None,
     ):
         self.cells = cells
         self.gap_cells = _compute_gap_cells(cells)
@@ -306,6 +322,14 @@ class Piece:
         # have one. Set via MainCanvas._assign_finger_to_selection while
         # Annotate mode is on.
         self.annotations = annotations if annotations is not None else {}
+        # Cells explicitly marked "played" via MainCanvas.
+        # _toggle_played_at_point (right-click a cell while Annotate is
+        # on), as "dc,dr" strings -- independent of self.annotations, so
+        # a note can be marked played with no fingering at all (an open
+        # string, or any fretted note obvious enough not to bother
+        # annotating a finger for). See is_played for how this combines
+        # with a fingering to answer "is this cell actually played".
+        self.played = set(played) if played is not None else set()
         # None until the user right-clicks a board piece to rename it
         # (see MainCanvas._try_rename_piece) -- display_name falls back
         # to the shape's traditional name (e.g. "left", "zig") until
@@ -333,6 +357,18 @@ class Piece:
             return self.shape_name
         return "piece"
 
+    def is_played(self, dc: int, dr: int) -> bool:
+        """Whether this cell counts as actually played, for the "Played
+        only" export option (see controls.get_played_only) and the live
+        board's own played marker (see draw below) -- true if it has an
+        explicit played mark (self.played), *or* a fingering at all
+        (self.annotations) -- assigning one to a note you don't intend to
+        play would be pointless, so that alone is enough without also
+        requiring the explicit mark.
+        """
+        key = f"{dc},{dr}"
+        return key in self.played or key in self.annotations
+
     def clone(self) -> "Piece":
         """A fresh, independent copy at the same position -- used to stamp
         a new board piece out of a tray template without disturbing the
@@ -348,6 +384,7 @@ class Piece:
             dict(self.annotations),
             self.name,
             self.is_accidental,
+            set(self.played),
         )
 
     def get_pixel_origin(self):
@@ -486,6 +523,31 @@ class Piece:
             sketch.set_text_font("sans-serif", 11)
             sketch.set_text_align("center", "center")
             sketch.draw_text(label_x, label_y, str(finger))
+            sketch.pop_style()
+
+        # Small always-on marker for any played cell (see Piece.
+        # is_played) -- a circle in this cell's own top-left corner, so
+        # "this note is actually played" stays visible even for a cell
+        # marked played with no fingering at all (an open string, or any
+        # fretted note obvious enough not to bother annotating a finger
+        # for -- see MainCanvas._toggle_played_at_point, right-click
+        # while Annotate is on).
+        for dc, dr in self.cells:
+            if not self.is_played(dc, dr):
+                continue
+            corner_x = x + dc * FRET_WIDTH
+            corner_y = y + dr * FRET_HEIGHT
+            sketch.push_style()
+            sketch.clear_stroke()
+            sketch.set_fill(_FINGER_BADGE_OUTLINE_COLOR)
+            sketch.draw_ellipse(
+                corner_x,
+                corner_y,
+                _PLAYED_MARKER_RADIUS + _PLAYED_MARKER_OUTLINE_EXTRA,
+                _PLAYED_MARKER_RADIUS + _PLAYED_MARKER_OUTLINE_EXTRA,
+            )
+            sketch.set_fill(_FINGER_BADGE_COLOR)
+            sketch.draw_ellipse(corner_x, corner_y, _PLAYED_MARKER_RADIUS, _PLAYED_MARKER_RADIUS)
             sketch.pop_style()
 
 
@@ -762,6 +824,78 @@ class TetraTray:
         sketch.pop_style()
 
 
+def _to_js_options(**kwargs):
+    """Convert keyword args into a plain JS object, for the handful of
+    browser APIs below that take an options object (showSaveFilePicker,
+    showDirectoryPicker, FileSystemHandle.*Permission) -- pyodide doesn't
+    auto-convert a Python dict into a JS object on its own.
+    """
+    return to_js(kwargs, dict_converter=js.Object.fromEntries)
+
+
+def _await_request(request):
+    """Wrap an IndexedDB request in an awaitable Promise.
+
+    IndexedDB predates Promises entirely and is callback-only (an
+    onsuccess/onerror pair fired on the request object), so this is the
+    standard bridge needed to `await` it the same way every other
+    browser API in this file is awaited.
+    """
+
+    def executor(resolve, reject):
+        request.onsuccess = create_proxy(lambda event: resolve(request.result))
+        request.onerror = create_proxy(lambda event: reject(request.error))
+
+    return js.Promise.new(create_proxy(executor))
+
+
+_EXPORT_FOLDER_DB_NAME = "tetraboard"
+_EXPORT_FOLDER_DB_STORE = "handles"
+_EXPORT_FOLDER_DB_KEY = "exportDirectory"
+
+
+async def _open_export_folder_db():
+    """The one IndexedDB database used to remember a chosen export
+    folder's directory handle across page reloads (see MainCanvas.
+    _choose_export_folder/_restore_export_folder). File System Access
+    API handles are structured-cloneable, so IndexedDB is the standard
+    way to persist one across sessions -- localStorage only holds
+    strings, and a real filesystem path isn't something the browser
+    ever exposes to script anyway (see _save_export_canvas).
+    """
+    request = js.window.indexedDB.open(_EXPORT_FOLDER_DB_NAME, 1)
+
+    def upgrade(event):
+        db = request.result
+        if not db.objectStoreNames.contains(_EXPORT_FOLDER_DB_STORE):
+            db.createObjectStore(_EXPORT_FOLDER_DB_STORE)
+
+    request.onupgradeneeded = create_proxy(upgrade)
+    return await _await_request(request)
+
+
+async def _get_remembered_export_folder():
+    db = await _open_export_folder_db()
+    store = db.transaction(_EXPORT_FOLDER_DB_STORE, "readonly").objectStore(_EXPORT_FOLDER_DB_STORE)
+    return await _await_request(store.get(_EXPORT_FOLDER_DB_KEY))
+
+
+async def _remember_export_folder(handle) -> None:
+    db = await _open_export_folder_db()
+    store = db.transaction(_EXPORT_FOLDER_DB_STORE, "readwrite").objectStore(_EXPORT_FOLDER_DB_STORE)
+    await _await_request(store.put(handle, _EXPORT_FOLDER_DB_KEY))
+
+
+async def _blob_from_data_url(data_url: str):
+    """A data: URL -> an awaitable Blob, via a same-document fetch --
+    canvases have no direct synchronous Blob getter (toBlob is
+    callback-based, not Promise-based), and this avoids hand-decoding
+    the base64 payload.
+    """
+    response = await js.fetch(data_url)
+    return await response.blob()
+
+
 class MainCanvas:
     """Owns the Sketchingpy sketch, wires input, and drives the draw loop."""
 
@@ -802,11 +936,30 @@ class MainCanvas:
         self.connections: list[dict] = []
         self.tonic_overrides: dict[tuple[int, int], bool] = {}
 
+        # Tracks whether Shift is currently held, so _on_key_press can
+        # tell a genuine press (transition from up to down) apart from
+        # the browser's own key-repeat while it stays held -- without
+        # this, holding Shift for even a moment would toggle Annotate
+        # back and forth repeatedly instead of once. Reset by
+        # _on_key_release.
+        self._shift_held = False
+
+        # A remembered export folder (see _choose_export_folder) -- None
+        # until either the user picks one this session or a previous
+        # session's choice is restored from IndexedDB (see
+        # _restore_export_folder, scheduled as a background task just
+        # below since __init__ itself can't be async). _save_export_canvas
+        # writes straight here with no dialog whenever this is set and
+        # still has permission; falls back to the usual Save-As dialog
+        # otherwise.
+        self._export_directory_handle = None
+
         self._rebuild_from_controls()
 
         self.sketch.get_mouse().on_button_press(self._on_press)
         self.sketch.get_mouse().on_button_release(self._on_release)
         self.sketch.get_keyboard().on_key_press(self._on_key_press)
+        self.sketch.get_keyboard().on_key_release(self._on_key_release)
         self.sketch.on_step(self._step)
         controls.on_visible_modes_change(self._rebuild_trays)
         controls.on_validator_change(self._on_validator_change)
@@ -815,8 +968,10 @@ class MainCanvas:
         controls.on_clear_board(self._clear_board)
         controls.on_annotate_toggle(self._on_annotate_toggle)
         controls.on_export_png(self._export_png)
+        controls.on_set_export_folder(self._choose_export_folder)
         controls.on_save_state(self._serialize_state)
         controls.on_load_state(self._load_state)
+        asyncio.ensure_future(self._restore_export_folder())
 
     def _rebuild_from_controls(self):
         """(Re-)derive every piece of state that depends on the control
@@ -918,6 +1073,10 @@ class MainCanvas:
             "row": piece.row,
             "annotations": piece.annotations,
             "name": piece.name,
+            # Sorted for a stable/diffable save file -- a set has no
+            # inherent order, and JSON has no set type anyway, so this is
+            # a plain list either way (see Piece.played).
+            "played": sorted(piece.played),
         }
 
     def _build_piece_from_state(self, entry: dict) -> "Piece | None":
@@ -943,6 +1102,7 @@ class MainCanvas:
                 annotations=entry.get("annotations", {}),
                 name=entry.get("name"),
                 is_accidental=True,
+                played=entry.get("played", []),
             )
 
         mode = self.all_modes_by_name.get(entry.get("mode_name"))
@@ -961,6 +1121,7 @@ class MainCanvas:
             shape_name=shape.name,
             annotations=entry.get("annotations", {}),
             name=entry.get("name"),
+            played=entry.get("played", []),
         )
 
     def _serialize_state(self) -> dict:
@@ -1181,6 +1342,11 @@ class MainCanvas:
     def _try_rename_piece(self, px, py):
         """Right-click a board piece to rename it via a native prompt().
 
+        Only while Annotate is off -- right-click means something else
+        while it's on (see _toggle_played_at_point), the same way
+        left-click already means something else there (see
+        _handle_annotate_click vs. the plain drag-pickup below).
+
         Only board_pieces are renameable, not tray templates -- a tray
         shape's name ("Major straight") is already unique within its
         tray by construction; it's stacking the *same* shape onto the
@@ -1196,6 +1362,32 @@ class MainCanvas:
                 new_name = js.window.prompt("Rename this shape:", piece.display_name)
                 if new_name is not None:
                     piece.name = new_name.strip() or None
+                return
+
+    def _toggle_played_at_point(self, px, py):
+        """Right-click a board piece's note cell while Annotate is on --
+        toggles that cell's explicit "played" mark (see Piece.is_played),
+        independent of any fingering.
+
+        This is the only way to mark a note played with no fingering at
+        all: per direct user feedback, plenty of notes don't need a
+        fingering written down (an open string has no fretting finger to
+        note in the first place; plenty of fretted notes are "obvious"
+        enough not to bother) but should still be countable as played for
+        the "Played only" export option -- previously "played" was
+        entirely inferred from having a fingering, which left no way to
+        mark either of those. Same topmost-hit-wins order as
+        _handle_annotate_click/_try_rename_piece; a miss is a silent
+        no-op, matching _try_rename_piece's own miss behavior.
+        """
+        for piece in reversed(self.board_pieces):
+            cell = piece.cell_at_point(px, py)
+            if cell is not None:
+                key = f"{cell[0]},{cell[1]}"
+                if key in piece.played:
+                    piece.played.discard(key)
+                else:
+                    piece.played.add(key)
                 return
 
     def _is_ctrl_held(self) -> bool:
@@ -1335,9 +1527,21 @@ class MainCanvas:
             self.tonic_overrides[(col, row)] = not self._is_tonic(col, row)
 
     def _on_key_press(self, button):
+        name = button.get_name()
+
+        # Works regardless of Annotate's current state -- flipping that
+        # state is the whole point -- and ahead of the is_annotate_enabled
+        # guard below, which only gates the annotate-mode-only hotkeys.
+        # Guarded by _shift_held so the browser's own key-repeat while
+        # Shift stays physically held doesn't toggle it back and forth.
+        if name == sketchingpy.const.KEYBOARD_SHIFT_BUTTON:
+            if not self._shift_held:
+                self._shift_held = True
+                controls.toggle_annotate()
+            return
+
         if not controls.is_annotate_enabled():
             return
-        name = button.get_name()
         if name in _FINGER_HOTKEYS:
             self._assign_finger_to_selection(_FINGER_HOTKEYS[name])
         elif name == _CLEAR_FINGER_KEY:
@@ -1346,6 +1550,10 @@ class MainCanvas:
             self._apply_technique_to_selection(_TECHNIQUE_HOTKEYS[name])
         elif name == _TONIC_HOTKEY:
             self._toggle_tonic_for_selection()
+
+    def _on_key_release(self, button):
+        if button.get_name() == sketchingpy.const.KEYBOARD_SHIFT_BUTTON:
+            self._shift_held = False
 
     def _on_annotate_toggle(self):
         """Live update when the Annotate checkbox changes (either
@@ -1368,7 +1576,10 @@ class MainCanvas:
         py = mouse.get_pointer_y()
 
         if button.get_name() == sketchingpy.const.MOUSE_RIGHT_BUTTON:
-            self._try_rename_piece(px, py)
+            if controls.is_annotate_enabled():
+                self._toggle_played_at_point(px, py)
+            else:
+                self._try_rename_piece(px, py)
             return
 
         if controls.is_annotate_enabled():
@@ -1567,16 +1778,23 @@ class MainCanvas:
         """
         return any(cell in footprint and neighbor in footprint for footprint in piece_footprints)
 
-    def _export_png(self):
+    async def _export_png(self):
         """Registered as the Export PNG callback -- see controls.on_export_png.
 
         Redraws a clean, high-contrast diagram of just the placed pieces
-        (bounding box of board_pieces' actual cells, light background, no
-        trays/dark editing chrome) directly onto the main canvas, saves it,
-        then immediately redraws the normal interactive frame -- all inside
-        this one synchronous call, so the browser never gets a chance to
-        paint the intermediate export frame (see PLAN.md for why this
-        doesn't need a second canvas or resizing the live one).
+        (bounding box of board_pieces' actual cells, transparent
+        background, no trays/dark editing chrome) directly onto the main
+        canvas, crops that down to just the drawn content into a small
+        offscreen canvas (see _export_crop_canvas), and immediately
+        redraws the normal interactive frame -- all synchronous, so the
+        browser never gets a chance to paint the intermediate export
+        frame (see PLAN.md for why this doesn't need a second canvas or
+        resizing the live one). Only *after* the live view is back does
+        this await actually saving the crop (see _save_export_canvas) --
+        that step can involve a native "Save As" dialog staying open for
+        as long as the user takes to respond, and the interactive frame
+        needs to already be showing underneath it by then, not the export
+        art frozen behind a dialog that has nothing to do with it.
         """
         # Column isn't bounds-checked -- see _export_piece_footprints'
         # docstring: a piece is allowed to overhang past the open string
@@ -1597,6 +1815,7 @@ class MainCanvas:
             return
 
         view = controls.get_export_view()
+        played_only = controls.get_played_only()
         pattern_name = controls.get_pattern_name().strip() or _DEFAULT_PATTERN_NAME
         suffix = _EXPORT_VIEW_FILENAME_SUFFIXES[view]
         filename = f"{pattern_name}_{suffix}.png"
@@ -1628,15 +1847,24 @@ class MainCanvas:
         def row_y(row: int) -> float:
             return FRETBOARD_BORDER_Y + row * FRET_HEIGHT
 
-        self.sketch.clear("#FFFFFF")
+        # Transparent, not opaque white -- sketchingpy's own clear() always
+        # paints a solid fillRect after clearing (see its source), so
+        # getting a transparent background means reaching past it to the
+        # canvas's own 2D context and clearing without that fill. This is
+        # meant to be pasted directly over other documents (sheet music,
+        # tab, slides) -- see the pattern's own grid cells just below,
+        # which skip a fill for the same reason.
+        self.sketch.get_native().getContext("2d").clearRect(0, 0, TOTAL_WIDTH, TOTAL_HEIGHT)
 
         # Pass 1: the plain grid -- every cell in range, occupied or not,
-        # full size. Drawn first so the shading (pass 2) lands on top of it.
+        # full size. Drawn first so the shading (pass 2) lands on top of
+        # it. No fill (just the border) -- see the transparency comment
+        # above.
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
                 self.sketch.set_stroke(EXPORT_CELL_BORDER_COLOR)
                 self.sketch.set_stroke_weight(EXPORT_CELL_BORDER_WEIGHT)
-                self.sketch.set_fill("#FFFFFF")
+                self.sketch.clear_fill()
                 self.sketch.draw_rect(col_x(col), row_y(row), FRET_WIDTH, FRET_HEIGHT)
 
         # The nut: a solid bar standing in for the real physical boundary
@@ -1736,8 +1964,25 @@ class MainCanvas:
                     note_fill = EXPORT_CELL_FILL_COLOR
                 else:
                     note_fill = EXPORT_NON_ROOT_FILL_COLOR
+                outline_color = EXPORT_NOTE_OUTLINE_COLOR
+                stripe_color = EXPORT_ACCIDENTAL_STRIPE_COLOR
+                label_color = EXPORT_LABEL_COLOR
+
+                # "Played only" (see controls.get_played_only): a note
+                # that isn't played (see Piece.is_played -- a fingering,
+                # *or* an explicit right-click mark for notes that don't
+                # need one, e.g. an open string) gets these flat colors
+                # instead of drawn at full strength -- see
+                # EXPORT_UNPLAYED_FILL_COLOR's comment for why solid
+                # colors, not alpha transparency.
+                if played_only and not piece.is_played(dc, dr):
+                    note_fill = EXPORT_UNPLAYED_FILL_COLOR
+                    outline_color = EXPORT_UNPLAYED_OUTLINE_COLOR
+                    stripe_color = EXPORT_UNPLAYED_STRIPE_COLOR
+                    label_color = EXPORT_UNPLAYED_LABEL_COLOR
+
                 self.sketch.push_style()
-                self.sketch.set_stroke(EXPORT_NOTE_OUTLINE_COLOR)
+                self.sketch.set_stroke(outline_color)
                 self.sketch.set_stroke_weight(EXPORT_NOTE_OUTLINE_WEIGHT)
                 self.sketch.set_fill(note_fill)
                 badge_x = x + EXPORT_NOTE_INSET
@@ -1746,7 +1991,7 @@ class MainCanvas:
                 badge_h = FRET_HEIGHT - 2 * EXPORT_NOTE_INSET
                 self.sketch.draw_rect(badge_x, badge_y, badge_w, badge_h)
                 if piece.is_accidental:
-                    self.sketch.set_stroke(EXPORT_ACCIDENTAL_STRIPE_COLOR)
+                    self.sketch.set_stroke(stripe_color)
                     self.sketch.set_stroke_weight(EXPORT_ACCIDENTAL_STRIPE_WEIGHT)
                     _draw_diagonal_hatch(
                         self.sketch, badge_x, badge_y, badge_w, badge_h, EXPORT_ACCIDENTAL_STRIPE_SPACING
@@ -1757,7 +2002,7 @@ class MainCanvas:
                 if not label:
                     continue
                 self.sketch.push_style()
-                self.sketch.set_fill(EXPORT_LABEL_COLOR)
+                self.sketch.set_fill(label_color)
                 # See the finger-badge note in Piece.draw -- draw_text
                 # strokes as well as fills, and the cell border's black
                 # stroke is still active here; without clearing it the
@@ -1959,8 +2204,168 @@ class MainCanvas:
             self.sketch.draw_text(col_x(0) + FRET_WIDTH / 2, marker_y, "O")
             self.sketch.pop_style()
 
-        self.sketch.save_image(filename)
+        # Crop down to just this content -- see EXPORT_CANVAS_PADDING's
+        # comment for why the padding is generous rather than exact, and
+        # _export_png's own docstring for why the interactive frame gets
+        # restored (right below) before the actual save is awaited, not
+        # after. Top also backs off by the nut's own overhang (only
+        # relevant when the nut is actually drawn, but harmless padding
+        # otherwise) so its rounded ends never land right on the crop
+        # edge.
+        crop_left = max(0.0, col_x(min_col) - EXPORT_CANVAS_PADDING)
+        crop_top = max(0.0, row_y(min_row) - EXPORT_NUT_OVERHANG - EXPORT_CANVAS_PADDING)
+        crop_right = min(TOTAL_WIDTH, col_x(max_col) + FRET_WIDTH + EXPORT_CANVAS_PADDING)
+        crop_bottom = min(TOTAL_HEIGHT, row_y(max_row + 1) + FRETBOARD_BORDER_Y + EXPORT_CANVAS_PADDING)
+
+        crop_canvas = self._export_crop_canvas(
+            crop_left, crop_top, crop_right - crop_left, crop_bottom - crop_top
+        )
         self._step(self.sketch)  # restore the normal interactive frame
+        await self._save_export_canvas(crop_canvas, filename)
+
+    def _export_crop_canvas(self, x: float, y: float, width: float, height: float):
+        """A new offscreen canvas holding just (x, y, width, height) of the
+        live canvas (in the same logical/CSS pixel space every other
+        _export_png coordinate is already in) -- see _export_png's
+        docstring for why the export needs cropping down from the full
+        app canvas at all rather than saving it whole.
+
+        Copied at the live canvas's own backing-store resolution (see
+        _fix_canvas_sharpness) instead of a naive 1:1 logical-pixel copy,
+        so a HiDPI export comes out just as sharp as the interactive
+        board already is -- drawImage's source rectangle addresses actual
+        bitmap pixels, not the logical ones the 2D context's own scale()
+        transform maps drawing calls through.
+        """
+        dpr = js.window.devicePixelRatio or 1
+        source = self.sketch.get_native()
+        crop = js.document.createElement("canvas")
+        crop.width = width * dpr
+        crop.height = height * dpr
+        context = crop.getContext("2d")
+        context.drawImage(
+            source,
+            x * dpr,
+            y * dpr,
+            width * dpr,
+            height * dpr,
+            0,
+            0,
+            width * dpr,
+            height * dpr,
+        )
+        return crop
+
+    async def _save_export_canvas(self, canvas, filename: str) -> None:
+        """Save an offscreen canvas (see _export_crop_canvas) as a PNG.
+
+        Three ways to actually get the file out, tried in order:
+
+        1. A remembered export folder (see _choose_export_folder) -- if
+           one's set and still grants write permission, write straight
+           into it under `filename`, no dialog at all. This is the path
+           that makes batch-exporting many patterns painless: pick the
+           folder once, then every export after that just lands there.
+        2. The File System Access API's native "Save As" dialog
+           (Chromium browsers) -- lets the file land wherever the user
+           picks for *this* export, rather than always going to the
+           browser's fixed Downloads folder the way a plain synthetic
+           `<a download>` click always does.
+        3. That exact synthetic-click mechanism -- the same one
+           sketchingpy's own save_image uses internally (see
+           TUTORIAL.md section 7) -- wherever neither of the above is
+           available (Firefox/Safari as of this writing) or applicable.
+
+        Does nothing at all (no download) if the user cancels a picker
+        dialog along the way, same as Save State's cancelled filename
+        prompt already does.
+        """
+        data_url = canvas.toDataURL("image/png")
+
+        if self._export_directory_handle is not None:
+            try:
+                permission = await self._export_directory_handle.requestPermission(
+                    _to_js_options(mode="readwrite")
+                )
+                if permission == "granted":
+                    file_handle = await self._export_directory_handle.getFileHandle(
+                        filename, _to_js_options(create=True)
+                    )
+                    writable = await file_handle.createWritable()
+                    await writable.write(await _blob_from_data_url(data_url))
+                    await writable.close()
+                    return
+            except JsException:
+                pass  # permission lost / folder moved -- fall through below
+
+        if hasattr(js.window, "showSaveFilePicker"):
+            options = _to_js_options(
+                suggestedName=filename,
+                types=[{"description": "PNG image", "accept": {"image/png": [".png"]}}],
+            )
+            try:
+                handle = await js.window.showSaveFilePicker(options)
+            except JsException:
+                return  # user cancelled the picker -- no download
+            writable = await handle.createWritable()
+            await writable.write(await _blob_from_data_url(data_url))
+            await writable.close()
+            return
+
+        link = js.document.createElement("a")
+        link.download = filename
+        link.href = data_url
+        link.click()
+
+    async def _choose_export_folder(self) -> None:
+        """Registered as the "Set export folder" callback -- see
+        controls.on_set_export_folder.
+
+        Lets the user pick a folder once via the File System Access
+        API's native directory picker; every export after that (see
+        _save_export_canvas) writes straight into it with no dialog,
+        until this is called again to pick a different one. Persisted to
+        IndexedDB (see _remember_export_folder) so the choice survives a
+        page reload, not just this session.
+        """
+        try:
+            handle = await js.window.showDirectoryPicker(_to_js_options(mode="readwrite"))
+        except JsException:
+            return  # user cancelled the picker
+        self._export_directory_handle = handle
+        controls.set_export_folder_label(handle.name)
+        try:
+            await _remember_export_folder(handle)
+        except JsException:
+            pass  # this session can still export straight to it either way
+
+    async def _restore_export_folder(self) -> None:
+        """Runs once at startup (see __init__, scheduled as a background
+        task since __init__ itself can't be async) to reload whatever
+        folder a previous session remembered via _choose_export_folder --
+        without this, IndexedDB would be write-only and every fresh page
+        load would silently fall back to the picker/download path no
+        matter what was chosen before.
+
+        Only silently re-checks permission (queryPermission, no user
+        gesture needed) rather than re-requesting it (requestPermission,
+        which does) -- there's no gesture available this early during
+        startup, but one always is by the time an actual export happens
+        (the button click itself), so _save_export_canvas re-requests it
+        there instead if this leaves it not yet granted.
+        """
+        try:
+            handle = await _get_remembered_export_folder()
+        except JsException:
+            return
+        if handle is None:
+            return
+        try:
+            await handle.queryPermission(_to_js_options(mode="readwrite"))
+        except JsException:
+            return
+        self._export_directory_handle = handle
+        controls.set_export_folder_label(handle.name)
 
     def _fix_canvas_sharpness(self):
         """Match the canvas's backing-store resolution to the display's

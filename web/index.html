@@ -32,15 +32,47 @@
                has no widget/dropdown abstraction of its own (confirmed
                against its source and its own example site -- see
                TUTORIAL.md if that file is still around), so this chrome
-               lives here rather than being canvas-drawn. */
+               lives here rather than being canvas-drawn.
+
+               Two stacked rows: the controls themselves (grouped into
+               labeled sections -- Board / Trays / Scale / Edit / Export /
+               State, left to right in the order you'd actually touch them
+               setting up then exporting a pattern), then a single
+               always-visible hotkey legend underneath. The legend exists
+               because Annotate mode's whole interaction model (click to
+               select, then a keyboard/mouse action to do something with
+               the selection) has no other affordance in the UI itself --
+               see DEVELOPING.md/PLAN.md for why each hotkey means what it
+               means. */
             #control-panel {
                 display: flex;
-                flex-wrap: wrap;
-                align-items: center;
-                gap: 16px;
+                flex-direction: column;
+                gap: 8px;
                 padding: 12px 16px;
                 background: #181818;
                 border-bottom: 1px solid #303038;
+            }
+            #control-panel-controls {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: flex-start;
+                gap: 20px;
+            }
+            .panel-section {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+            .panel-section + .panel-section {
+                border-left: 1px solid #303038;
+                padding-left: 20px;
+            }
+            .panel-section-label {
+                font-size: 11px;
+                font-weight: bold;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+                color: #6B6B70;
             }
             #control-panel .control-group {
                 display: flex;
@@ -63,6 +95,21 @@
             #control-panel input[type="file"]::file-selector-button:hover {
                 background: #383840;
                 cursor: pointer;
+            }
+            #hotkey-legend {
+                font-size: 12px;
+                color: #888888;
+                border-top: 1px solid #303038;
+                padding-top: 8px;
+            }
+            #hotkey-legend kbd {
+                background: #2A2A2E;
+                border: 1px solid #3A3A40;
+                border-radius: 3px;
+                padding: 1px 5px;
+                font-size: 11px;
+                font-family: inherit;
+                color: #DDDDDD;
             }
         </style>
     </head>
@@ -93,108 +140,136 @@
              what a Fret/String/Fretboard is. Your canvas code registers
              what these controls should actually do -- see DEVELOPING.md. -->
         <div id="control-panel">
-            <div class="control-group">
-                <label for="control-tuning">Tuning</label>
-                <select id="control-tuning">
-                    <option value="E1,A1,D2,G2">Standard 4 (E A D G)</option>
-                    <option value="B0,E1,A1,D2,G2">Standard 5 (B E A D G)</option>
-                    <option value="B0,E1,A1,D2,G2,C3" selected>Standard 6 (B E A D G C)</option>
-                </select>
+            <div id="control-panel-controls">
+                <div class="panel-section">
+                    <span class="panel-section-label">Board</span>
+                    <div class="control-group">
+                        <label for="control-tuning">Tuning</label>
+                        <select id="control-tuning">
+                            <option value="E1,A1,D2,G2">Standard 4 (E A D G)</option>
+                            <option value="B0,E1,A1,D2,G2">Standard 5 (B E A D G)</option>
+                            <option value="B0,E1,A1,D2,G2,C3" selected>Standard 6 (B E A D G C)</option>
+                        </select>
+                        <label for="control-fret-count">Frets</label>
+                        <select id="control-fret-count">
+                            <option value="12">12</option>
+                            <option value="16">16</option>
+                            <option value="20">20</option>
+                            <option value="22">22</option>
+                            <option value="24" selected>24</option>
+                            <option value="27">27</option>
+                            <option value="30">30</option>
+                        </select>
+                        <label for="control-accidental-type">Accidentals</label>
+                        <select id="control-accidental-type">
+                            <option value="SHARP" selected>Sharps</option>
+                            <option value="FLAT">Flats</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <span class="panel-section-label">Trays</span>
+                    <div class="control-group">
+                        <label for="control-mode-a">Tray A</label>
+                        <select id="control-mode-a">
+                            <option value="Major" selected>Major</option>
+                            <option value="Minor">Minor</option>
+                            <option value="Phrygian">Phrygian</option>
+                            <option value="Lydian">Lydian</option>
+                        </select>
+                        <label for="control-mode-b">Tray B</label>
+                        <select id="control-mode-b">
+                            <option value="Major">Major</option>
+                            <option value="Minor" selected>Minor</option>
+                            <option value="Phrygian">Phrygian</option>
+                            <option value="Lydian">Lydian</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <span class="panel-section-label">Scale</span>
+                    <div class="control-group">
+                        <label for="control-key">Key</label>
+                        <select id="control-key">
+                            <option value="C">C</option>
+                            <option value="C#">C#</option>
+                            <option value="D">D</option>
+                            <option value="D#">D#</option>
+                            <option value="E">E</option>
+                            <option value="F">F</option>
+                            <option value="F#">F#</option>
+                            <option value="G">G</option>
+                            <option value="G#">G#</option>
+                            <option value="A" selected>A</option>
+                            <option value="A#">A#</option>
+                            <option value="B">B</option>
+                        </select>
+                        <label for="control-key-mode">Mode</label>
+                        <select id="control-key-mode">
+                            <option value="Ionian" selected>Ionian</option>
+                            <option value="Dorian">Dorian</option>
+                            <option value="Phrygian">Phrygian</option>
+                            <option value="Lydian">Lydian</option>
+                            <option value="Mixolydian">Mixolydian</option>
+                            <option value="Aeolian">Aeolian</option>
+                            <option value="Locrian">Locrian</option>
+                        </select>
+                        <label for="control-validate-toggle">Validate</label>
+                        <input type="checkbox" id="control-validate-toggle">
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <span class="panel-section-label">Edit</span>
+                    <div class="control-group">
+                        <button id="control-clear-board" type="button">Clear Board</button>
+                        <label for="control-annotate-toggle">Annotate</label>
+                        <input type="checkbox" id="control-annotate-toggle">
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <span class="panel-section-label">Export</span>
+                    <div class="control-group">
+                        <label for="control-pattern-name">Pattern name</label>
+                        <input type="text" id="control-pattern-name" placeholder="tetraboard-export" style="width: 160px;">
+                        <label for="control-export-view">View</label>
+                        <select id="control-export-view">
+                            <option value="vanilla" selected>Note name</option>
+                            <option value="interval">Interval</option>
+                            <option value="fingering">Fingering</option>
+                        </select>
+                        <label for="control-played-only">Played only</label>
+                        <input type="checkbox" id="control-played-only">
+                        <button id="control-export-png" type="button">Export PNG</button>
+                        <!-- Text/visibility set by controls.py's _bind() --
+                             hidden entirely in browsers without the File
+                             System Access API's directory picker (see
+                             _bind()'s comment). -->
+                        <button id="control-export-folder" type="button"></button>
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <span class="panel-section-label">State</span>
+                    <div class="control-group">
+                        <button id="control-save-state" type="button">Save State</button>
+                        <label for="control-load-state">Load State</label>
+                        <input type="file" id="control-load-state" accept="application/json">
+                    </div>
+                </div>
             </div>
 
-            <div class="control-group">
-                <label for="control-fret-count">Frets</label>
-                <select id="control-fret-count">
-                    <option value="12">12</option>
-                    <option value="16">16</option>
-                    <option value="20">20</option>
-                    <option value="22">22</option>
-                    <option value="24" selected>24</option>
-                    <option value="27">27</option>
-                    <option value="30">30</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <label for="control-accidental-type">Accidentals</label>
-                <select id="control-accidental-type">
-                    <option value="SHARP" selected>Sharps</option>
-                    <option value="FLAT">Flats</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <label for="control-mode-a">Tray A</label>
-                <select id="control-mode-a">
-                    <option value="Major" selected>Major</option>
-                    <option value="Minor">Minor</option>
-                    <option value="Phrygian">Phrygian</option>
-                    <option value="Lydian">Lydian</option>
-                </select>
-                <label for="control-mode-b">Tray B</label>
-                <select id="control-mode-b">
-                    <option value="Major">Major</option>
-                    <option value="Minor" selected>Minor</option>
-                    <option value="Phrygian">Phrygian</option>
-                    <option value="Lydian">Lydian</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <label for="control-key">Key</label>
-                <select id="control-key">
-                    <option value="C">C</option>
-                    <option value="C#">C#</option>
-                    <option value="D">D</option>
-                    <option value="D#">D#</option>
-                    <option value="E">E</option>
-                    <option value="F">F</option>
-                    <option value="F#">F#</option>
-                    <option value="G">G</option>
-                    <option value="G#">G#</option>
-                    <option value="A" selected>A</option>
-                    <option value="A#">A#</option>
-                    <option value="B">B</option>
-                </select>
-                <label for="control-key-mode">Mode</label>
-                <select id="control-key-mode">
-                    <option value="Ionian" selected>Ionian</option>
-                    <option value="Dorian">Dorian</option>
-                    <option value="Phrygian">Phrygian</option>
-                    <option value="Lydian">Lydian</option>
-                    <option value="Mixolydian">Mixolydian</option>
-                    <option value="Aeolian">Aeolian</option>
-                    <option value="Locrian">Locrian</option>
-                </select>
-                <label for="control-validate-toggle">Validate</label>
-                <input type="checkbox" id="control-validate-toggle">
-            </div>
-
-            <div class="control-group">
-                <button id="control-clear-board" type="button">Clear Board</button>
-                <label for="control-annotate-toggle">Annotate</label>
-                <input type="checkbox" id="control-annotate-toggle">
-            </div>
-
-            <div class="control-group">
-                <label for="control-pattern-name">Pattern name</label>
-                <input type="text" id="control-pattern-name" placeholder="tetraboard-export" style="width: 160px;">
-            </div>
-
-            <div class="control-group">
-                <label for="control-export-view">Export view</label>
-                <select id="control-export-view">
-                    <option value="vanilla" selected>Note name</option>
-                    <option value="interval">Interval</option>
-                    <option value="fingering">Fingering</option>
-                </select>
-                <button id="control-export-png" type="button">Export PNG</button>
-            </div>
-
-            <div class="control-group">
-                <button id="control-save-state" type="button">Save State</button>
-                <label for="control-load-state">Load State</label>
-                <input type="file" id="control-load-state" accept="application/json">
+            <div id="hotkey-legend">
+                <strong>Annotate hotkeys</strong> (click a note to select it, ctrl+click to select more):
+                <kbd>Shift</kbd> toggle Annotate ·
+                <kbd>1</kbd>-<kbd>4</kbd> finger (i/m/r/p) ·
+                <kbd>Backspace</kbd> clear finger ·
+                <kbd>s</kbd>/<kbd>h</kbd>/<kbd>p</kbd>/<kbd>r</kbd>/<kbd>b</kbd> slide/hammer-on/pull-off/roll/barre ·
+                <kbd>t</kbd> toggle tonic ·
+                right-click a note to toggle played
             </div>
         </div>
 
