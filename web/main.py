@@ -37,10 +37,12 @@ from config import (
     TOTAL_HEIGHT,
     TOTAL_WIDTH,
     AccidentalType,
+    estimate_text_width,
     get_interval_label,
     get_scale_pitch_classes,
     pitch_class_semitone,
     semitone_distance,
+    split_note_octave,
 )
 from export_style import (
     EXPORT_ACCIDENTAL_FILL_COLOR,
@@ -240,30 +242,11 @@ def _note_at_fret(string: "OpenString", col: int) -> str:
     return table[table.index(string.note_identity) + col]
 
 
-def _split_note_octave(note: str) -> tuple[str, str]:
-    """Split a note name like "C#2" into its letter/accidental part ("C#")
-    and trailing octave digits ("2") -- see _export_label's vanilla view,
-    which draws the octave smaller/de-emphasized next to the letter (the
-    octave number matters far less than the letter for reading a pattern
-    at a glance).
-    """
-    split = len(note)
-    while split > 0 and note[split - 1].isdigit():
-        split -= 1
-    return note[:split], note[split:]
-
-
 def _estimate_text_width(text: str, font_size: float) -> float:
-    """Rough pixel width of `text` at `font_size` -- draw_text has no real
-    text-measurement API to size a main+suffix label exactly (see
-    _export_png's badge-label drawing), so this per-character estimate is
-    what the split point between the two parts gets centered against
-    instead. Not exact (real character widths vary), but good enough to
-    keep a two-character main part like "F#" from visibly overflowing its
-    cell the way a fixed split point (tuned only for single characters)
-    did.
+    """estimate_text_width (see config.py) tuned for this export's own
+    label font -- see _export_png's badge-label drawing.
     """
-    return len(text) * font_size * EXPORT_TEXT_WIDTH_FACTOR
+    return estimate_text_width(text, font_size, EXPORT_TEXT_WIDTH_FACTOR)
 
 
 def _compute_gap_cells(cells):
@@ -1769,7 +1752,7 @@ class MainCanvas:
         if view == "fingering":
             return piece.annotations.get(f"{dc},{dr}", ""), ""
 
-        return _split_note_octave(_note_at_fret(string, col))  # vanilla (default)
+        return split_note_octave(_note_at_fret(string, col))  # vanilla (default)
 
     def _export_piece_footprints(self) -> list[set[tuple[int, int]]]:
         """One absolute-(col, row) footprint set per placed piece -- both
