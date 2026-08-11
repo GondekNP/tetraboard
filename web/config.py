@@ -222,3 +222,34 @@ def get_interval_label(
             quality = _INTERVAL_QUALITY_BY_DEGREE_SEMITONES.get((degree, semitones))
             return f"{quality}{degree}" if quality else None
     return None
+
+
+def split_note_octave(note: str) -> tuple[str, str]:
+    """Split a note name like "C#2" into its letter/accidental part ("C#")
+    and trailing octave digits ("2") -- shared by the live board's own
+    fret labels (fret.py's Fret.draw) and the export's vanilla view
+    (main.py's _export_label), both of which draw the octave digit
+    smaller/de-emphasized next to the letter (the octave number matters
+    far less than the letter for reading a pattern at a glance).
+    """
+    split = len(note)
+    while split > 0 and note[split - 1].isdigit():
+        split -= 1
+    return note[:split], note[split:]
+
+
+def estimate_text_width(text: str, font_size: float, factor: float) -> float:
+    """Rough pixel width of `text` at `font_size` -- draw_text has no real
+    text-measurement API to size a main+suffix label exactly (see
+    split_note_octave's callers), so this per-character estimate is what
+    the split point between the two parts gets centered against instead.
+    Not exact (real character widths vary), but good enough to keep a
+    two-character main part like "F#" from visibly overflowing its cell
+    the way a fixed split point (tuned only for single characters) did.
+
+    `factor` is the caller's own tuned average-width-per-character
+    fraction of font size (e.g. main.py's EXPORT_TEXT_WIDTH_FACTOR) --
+    not baked in here, since different fonts/weights/sizes can call for
+    different tuning.
+    """
+    return len(text) * font_size * factor

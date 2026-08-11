@@ -12,6 +12,14 @@ from config import (
 )
 from fret import Fret
 
+# Alternating row background by string index -- a flat single color
+# across every string (this file's previous look) read as too plain
+# per direct user feedback; close enough in value that a placed piece's
+# own translucent color on top still looks the same regardless of which
+# row it lands on, just distinct enough to help the eye track a single
+# string across a wide board.
+_ROW_FILL_COLORS = ("#F7F6F2", "#EAE8E1")
+
 
 @dataclass
 class OpenString:
@@ -62,6 +70,7 @@ class OpenString:
     def draw(self, sketch):
         sketch.set_stroke("#303038")
         sketch.set_stroke_weight(2)
+        sketch.set_fill(_ROW_FILL_COLORS[self.index % 2])
 
         for fret in self.frets:
             fret.draw(sketch)

@@ -6,6 +6,17 @@ from enum import Enum
 from config import AccidentalType
 from open_string import OpenString
 
+# The physical "nut" -- the board's edge just before fret 1 -- drawn as a
+# solid bar so the open string reads as a structural landmark instead of
+# looking like just another playable fret (same idea as the export's own
+# nut in main.py's _export_png, kept as a separate constant here since
+# this file has no dependency on that one -- see this file's docstring
+# for why background/grid colors below are likewise self-contained
+# rather than imported from export_style.py, which is export-only).
+_NUT_COLOR = "#202020"
+_NUT_WIDTH = 6
+_NUT_OVERHANG = 8
+
 
 class TUNINGS(Enum):
     """Available bass guitar tunings. Values match the <option> values in
@@ -34,14 +45,23 @@ class Fretboard:
         return sum([string.fret_height for string in self.strings])
 
     def draw(self, sketch):
-        sketch.set_fill("#EEEEEE")
-        sketch.set_stroke("#303038")
-        sketch.set_stroke_weight(1)
-
-        sketch.draw_rect(self.canvas_pos_x, self.canvas_pos_y, self.width, self.height)
-
+        # Each string draws its own full-width row band (alternating --
+        # see OpenString.draw) rather than one flat rect for the whole
+        # board -- per direct user feedback that a single flat color
+        # across every string read as too plain, this gives the grid a
+        # little visual rhythm to help the eye track across a row without
+        # competing with a placed piece's own translucent color on top.
         for string in self.strings:
             string.draw(sketch)
+
+        sketch.push_style()
+        sketch.clear_stroke()
+        sketch.set_fill(_NUT_COLOR)
+        nut_x = self.canvas_pos_x + self.strings[0].fret_width
+        nut_y = self.canvas_pos_y - _NUT_OVERHANG
+        nut_height = self.height + 2 * _NUT_OVERHANG
+        sketch.draw_rect(nut_x, nut_y, _NUT_WIDTH, nut_height)
+        sketch.pop_style()
 
 
 @dataclass
