@@ -18,6 +18,7 @@ in place, no manual refresh or Pyodide reboot needed.
 """
 
 import asyncio
+import itertools
 
 import controls
 import js
@@ -36,7 +37,7 @@ from config import (
     TOTAL_HEIGHT,
     TOTAL_WIDTH,
     AccidentalType,
-    get_scale_degree,
+    get_interval_label,
     get_scale_pitch_classes,
     pitch_class_semitone,
     semitone_distance,
@@ -55,6 +56,7 @@ from export_style import (
     EXPORT_FOOTPRINT_INSET,
     EXPORT_FRET_MARKER_COLOR,
     EXPORT_FRET_MARKER_RADIUS,
+    EXPORT_INTERVAL_LABEL_FONT_SIZE,
     EXPORT_LABEL_COLOR,
     EXPORT_LABEL_FONT_SIZE,
     EXPORT_NON_ROOT_FILL_COLOR,
@@ -66,13 +68,16 @@ from export_style import (
     EXPORT_NUT_OVERHANG,
     EXPORT_NUT_WIDTH,
     EXPORT_OPEN_STRING_MARKER_FONT_SIZE,
-    EXPORT_ORDINAL_SUFFIX_FONT_SIZE,
+    EXPORT_PIPE_DARKEN_FACTOR,
+    EXPORT_PIVOT_STRIPE_SPACING,
+    EXPORT_PIVOT_STRIPE_WEIGHT,
     EXPORT_STRING_LABEL_COLOR,
     EXPORT_STRING_LABEL_FONT_SIZE,
     EXPORT_STRING_LABEL_HALO_OFFSETS,
     EXPORT_STRING_LABEL_MARGIN,
     EXPORT_STRING_LABEL_OUTLINE_COLOR,
     EXPORT_TEXT_WIDTH_FACTOR,
+    EXPORT_TONIC_OUTLINE_WEIGHT,
     EXPORT_UNPLAYED_FILL_COLOR,
     EXPORT_UNPLAYED_LABEL_COLOR,
     EXPORT_UNPLAYED_OUTLINE_COLOR,
@@ -186,9 +191,8 @@ _DEFAULT_PATTERN_NAME = "tetraboard-export"
 # -- see that file's own docstring for what each one controls and how the
 # footprint/note insets relate. This file only has the *logic*: which cells
 # get shaded, which edges go flush, what text each label shows -- see
-# _export_png and _export_piece_footprints/_export_flush below for how
-# export_style's constants get used.
-_EXPORT_ORDINAL_SUFFIXES = {1: "st", 2: "nd", 3: "rd"}
+# _export_png and _export_piece_footprints below for how export_style's
+# constants get used.
 # View filename suffixes, appended to the pattern-name field's value --
 # see MainCanvas._export_png.
 _EXPORT_VIEW_FILENAME_SUFFIXES = {"vanilla": "notes", "interval": "intervals", "fingering": "fingering"}
@@ -214,10 +218,6 @@ _CLEAR_FINGER_KEY = "backspace"
 _SAME_STRING_TECHNIQUES = {"slide", "hammer_on", "pull_off"}
 _SAME_FRET_TECHNIQUES = {"roll", "barre"}
 _CONNECTION_LABELS = {"hammer_on": "H", "pull_off": "P"}
-
-
-def _ordinal_suffix(degree: int) -> str:
-    return _EXPORT_ORDINAL_SUFFIXES.get(degree, "th")
 
 
 def _note_at_fret(string: "OpenString", col: int) -> str:
@@ -284,6 +284,26 @@ def _compute_gap_cells(cells):
             if c not in cols:
                 gaps.append((c, r))
     return gaps
+
+
+def _row_blocks(cells: list[tuple[int, int]]) -> list[tuple[int, list[int]]]:
+    """Group a piece's cells (in scale-degree order) into consecutive
+    same-row runs -- e.g. a "left" shape's 4 cells split into two blocks:
+    the anchor string's first 2 notes, then the jumped-to string's last 2
+    (see modes.yaml). Used by _export_png's cross-string bridge to connect
+    whole strings to each other rather than one specific pair of notes --
+    see that method for why. Row only ever changes monotonically as
+    Shape.resolve_cells walks scale-degree order (a string jump only ever
+    moves to an adjacent string, never back), so a row is never revisited
+    once its run ends.
+    """
+    blocks: list[tuple[int, list[int]]] = []
+    for dc, dr in cells:
+        if blocks and blocks[-1][0] == dr:
+            blocks[-1][1].append(dc)
+        else:
+            blocks.append((dr, [dc]))
+    return blocks
 
 
 class Piece:
@@ -1516,6 +1536,25 @@ class MainCanvas:
             return False
         return pitch_class_semitone(string.frets[col].note) == pitch_class_semitone(self.key)
 
+    @staticmethod
+    def _export_piece_fill(piece: "Piece") -> str:
+        """One piece's export badge color with Grayscale off (see
+        controls.get_grayscale) -- its own live mode color (self.color,
+        the same value shown in its tray/board fill), or _ACCIDENTAL_COLOR
+        for an accidental piece. Pulled out from _export_png's badge-fill
+        selection so a shared-note cell (see cell_pieces) can call it once
+        per contributing piece to build its split colors.
+
+        Root/tonic status is deliberately not reflected here -- per direct
+        user feedback, color mode's colors are semantic (which mode a note
+        belongs to) and darkening the root muddies that plus is hard to
+        read; see EXPORT_TONIC_OUTLINE_WEIGHT for how root status reads
+        instead (a heavier badge outline, applied by the caller).
+        """
+        if piece.is_accidental:
+            return _ACCIDENTAL_COLOR
+        return piece.color
+
     def _toggle_tonic_for_selection(self):
         """`t` hotkey: flip each selected cell's tonic status independently
         (based on its own current resolved value, auto or override), into
@@ -1703,19 +1742,18 @@ class MainCanvas:
         view mode (see controls.get_export_view) -- wholesale replaces the
         note label, never combines more than one axis at once.
 
-        Returns (main_text, suffix_text): suffix_text is non-empty for the
-        interval view's ordinal suffix ("st"/"nd"/"rd"/"th", drawn smaller
-        and raised next to the degree) and for the vanilla view's octave
-        digit (drawn smaller, same baseline, next to the note letter) --
-        see _export_png for how those two get told apart and drawn
-        differently. Empty suffix for fingering, and for every view on a
-        cell outside the real playable board (col < 0 or col >=
-        self.grid_cols): a piece is allowed to overhang past the open
-        string or the last fret (see Piece.snap_to_grid), but there's no
-        real note there to label -- the footprint shading/badge still
-        draws for those cells (see _export_png), just without text, so the
-        shape reads as continuous without claiming a note exists where one
-        doesn't.
+        Returns (main_text, suffix_text): suffix_text is non-empty only for
+        the vanilla view's octave digit (drawn smaller, same baseline, next
+        to the note letter) -- see _export_png for how that gets drawn.
+        Empty suffix for interval (its quality-prefixed label, e.g. "Aug4",
+        is a single self-contained string -- see config.get_interval_label)
+        and fingering, and for every view on a cell outside the real
+        playable board (col < 0 or col >= self.grid_cols): a piece is
+        allowed to overhang past the open string or the last fret (see
+        Piece.snap_to_grid), but there's no real note there to label -- the
+        footprint shading/badge still draws for those cells (see
+        _export_png), just without text, so the shape reads as continuous
+        without claiming a note exists where one doesn't.
         """
         if col < 0 or col >= self.grid_cols:
             return "", ""
@@ -1725,8 +1763,8 @@ class MainCanvas:
             return "", ""
 
         if view == "interval":
-            degree = get_scale_degree(self.key, _note_at_fret(string, col), MODE_INTERVALS[self.key_mode])
-            return (str(degree), _ordinal_suffix(degree)) if degree is not None else ("", "")
+            label = get_interval_label(self.key, _note_at_fret(string, col), MODE_INTERVALS[self.key_mode])
+            return (label, "") if label is not None else ("", "")
 
         if view == "fingering":
             return piece.annotations.get(f"{dc},{dr}", ""), ""
@@ -1762,22 +1800,6 @@ class MainCanvas:
             footprints.append(footprint)
         return footprints
 
-    @staticmethod
-    def _export_flush(
-        cell: tuple[int, int],
-        neighbor: tuple[int, int],
-        piece_footprints: list[set[tuple[int, int]]],
-    ) -> bool:
-        """True if some single piece's footprint contains both `cell` and
-        `neighbor` -- i.e. the shading rects for those two cells should
-        extend flush to their shared edge rather than each keeping its own
-        inward buffer there. Two adjacent tetrachords that share a root
-        note both contain that shared cell, so this naturally reads as one
-        continuous shape across the pair -- no special-casing needed for
-        that overlap case.
-        """
-        return any(cell in footprint and neighbor in footprint for footprint in piece_footprints)
-
     async def _export_png(self):
         """Registered as the Export PNG callback -- see controls.on_export_png.
 
@@ -1801,7 +1823,14 @@ class MainCanvas:
         # or the last fret, and export still draws that part of the shape
         # rather than cropping it, even though it's not actually
         # reachable there.
+        # cell_pieces keeps *every* piece that has a real note at a given
+        # absolute position (usually one -- cell_map's last-wins value is
+        # enough on its own), so the badge-fill pass below can tell when
+        # two tetrachords share a note (their pivot, by construction --
+        # see _is_tonic) and split its color between both instead of
+        # picking whichever piece happens to be last in board_pieces.
         cell_map: dict[tuple[int, int], tuple[Piece, int, int]] = {}
+        cell_pieces: dict[tuple[int, int], list[tuple[Piece, int, int]]] = {}
         for piece in self.board_pieces:
             for dc, dr in piece.cells:
                 col = round(piece.col) + dc
@@ -1809,6 +1838,7 @@ class MainCanvas:
                 if row not in self.strings_by_row:
                     continue
                 cell_map[(col, row)] = (piece, dc, dr)
+                cell_pieces.setdefault((col, row), []).append((piece, dc, dr))
 
         if not cell_map:
             js.window.alert("Nothing to export -- place a shape on the board first.")
@@ -1816,12 +1846,28 @@ class MainCanvas:
 
         view = controls.get_export_view()
         played_only = controls.get_played_only()
+        grayscale = controls.get_grayscale()
         pattern_name = controls.get_pattern_name().strip() or _DEFAULT_PATTERN_NAME
         suffix = _EXPORT_VIEW_FILENAME_SUFFIXES[view]
         filename = f"{pattern_name}_{suffix}.png"
 
         piece_footprints = self._export_piece_footprints()
         footprint_cells: set[tuple[int, int]] = set().union(*piece_footprints) if piece_footprints else set()
+        # Every piece whose footprint contains a given cell, for the same
+        # reason cell_pieces tracks every piece with a *note* there: a
+        # pivot cell where two tetrachords meet needs both pieces' own
+        # pipe fills drawn (see the fill-selection comment below), not
+        # just one arbitrarily chosen "owner" -- a single owner previously
+        # picked one piece's color for the whole cell and checked flush
+        # against *that piece's own* footprint only, which correctly
+        # stopped its color from bleeding into the other piece's side but
+        # also silently dropped the *other* piece's own, entirely
+        # legitimate connection through this same cell.
+        footprint_contributors: dict[tuple[int, int], list[Piece]] = {}
+        piece_to_footprint: dict[Piece, set[tuple[int, int]]] = dict(zip(self.board_pieces, piece_footprints))
+        for owner, footprint in piece_to_footprint.items():
+            for cell in footprint:
+                footprint_contributors.setdefault(cell, []).append(owner)
 
         # The full footprint (every piece's real notes *and* gap cells),
         # not just cell_map's actual note positions -- a piece is free to
@@ -1895,11 +1941,12 @@ class MainCanvas:
             self.sketch.pop_style()
 
         # Pass 2: the shading (gray content, biased inward except on
-        # edges shared with a same-piece neighbor -- see _export_flush)
-        # plus each real note's badge and label. No separate backing/
-        # outline layer underneath this -- see EXPORT_FOOTPRINT_FILL_COLOR's
-        # comment for why that was tried and dropped; the flush-biased
-        # shading below is the entire mechanism for showing connectivity.
+        # edges each contributing piece's own footprint is flush against
+        # -- see the flush check below) plus each real note's badge and
+        # label. No separate backing/outline layer underneath this -- see
+        # EXPORT_FOOTPRINT_FILL_COLOR's comment for why that was tried and
+        # dropped; the flush-biased shading below is the entire mechanism
+        # for showing connectivity.
         for row in range(min_row, max_row + 1):
             for col in range(min_col, max_col + 1):
                 x = col_x(col)
@@ -1921,20 +1968,46 @@ class MainCanvas:
                     # drawn as its own small rect after every badge, right
                     # below this loop, sized to match the badge instead of
                     # the whole cell.
-                    left = 0 if self._export_flush((col, row), (col - 1, row), piece_footprints) else EXPORT_FOOTPRINT_INSET
-                    right = 0 if self._export_flush((col, row), (col + 1, row), piece_footprints) else EXPORT_FOOTPRINT_INSET
-                    top = EXPORT_FOOTPRINT_INSET
-                    bottom = EXPORT_FOOTPRINT_INSET
-                    self.sketch.push_style()
-                    self.sketch.clear_stroke()
-                    self.sketch.set_fill(EXPORT_FOOTPRINT_FILL_COLOR)
-                    self.sketch.draw_rect(
-                        x + left,
-                        y + top,
-                        FRET_WIDTH - left - right,
-                        FRET_HEIGHT - top - bottom,
-                    )
-                    self.sketch.pop_style()
+                    #
+                    # Drawn once per *contributing* piece, not once per
+                    # cell with one arbitrarily chosen owner -- a shared
+                    # pivot cell (two pieces' footprints both contain it)
+                    # has two independent, equally real connections
+                    # through it (e.g. a Major piece's own last note
+                    # flush with its own previous note on one side, a
+                    # Lydian piece's own root flush with its own next
+                    # note on the other), and picking a single owner
+                    # either dropped whichever piece wasn't picked or
+                    # blindly stretched the picked piece's color into the
+                    # *other* piece's territory. Each piece's own flush
+                    # check is scoped to that piece's own footprint
+                    # specifically, so the two rects only ever agree with
+                    # each other where they're genuinely the same
+                    # connection (this piece really does own both
+                    # neighboring cells). Both rects sit well behind the
+                    # opaque note badge (FOOTPRINT_INSET > NOTE_INSET), so
+                    # where they overlap it's invisible either way -- only
+                    # the non-overlapping slivers at the true flush edges
+                    # ever show.
+                    for owner in footprint_contributors[(col, row)]:
+                        owner_footprint = piece_to_footprint[owner]
+                        left = 0 if (col - 1, row) in owner_footprint else EXPORT_FOOTPRINT_INSET
+                        right = 0 if (col + 1, row) in owner_footprint else EXPORT_FOOTPRINT_INSET
+                        top = EXPORT_FOOTPRINT_INSET
+                        bottom = EXPORT_FOOTPRINT_INSET
+                        pipe_fill = (
+                            EXPORT_FOOTPRINT_FILL_COLOR if grayscale else _darken(owner.color, EXPORT_PIPE_DARKEN_FACTOR)
+                        )
+                        self.sketch.push_style()
+                        self.sketch.clear_stroke()
+                        self.sketch.set_fill(pipe_fill)
+                        self.sketch.draw_rect(
+                            x + left,
+                            y + top,
+                            FRET_WIDTH - left - right,
+                            FRET_HEIGHT - top - bottom,
+                        )
+                        self.sketch.pop_style()
 
                 if entry is None:
                     continue
@@ -1948,23 +2021,59 @@ class MainCanvas:
                 # than that shading (EXPORT_NOTE_INSET < EXPORT_FOOTPRINT_
                 # INSET, see export_style.py's docstring), with its own
                 # outline so it stays visually distinct even where the two
-                # colors are close in value. Solid/opaque, no mode colors
-                # -- unlike the translucent piece.color used on the
-                # interactive board, since this is its own from-scratch
-                # print-oriented redraw, not a screenshot. An accidental
-                # note (see Piece.is_accidental) gets its own color
-                # regardless of root status -- being off-scale is the more
-                # specific fact worth flagging here. Otherwise, the
+                # colors are close in value. An accidental note (see
+                # Piece.is_accidental) gets its own color regardless of
+                # root status -- being off-scale is the more specific fact
+                # worth flagging here. Otherwise, in color mode, the
                 # root/tonic note (its pitch class matching the selected
-                # Key, or an explicit override) stays solid black, every
-                # other note goes gray.
-                if piece.is_accidental:
-                    note_fill = EXPORT_ACCIDENTAL_FILL_COLOR
-                elif self._is_tonic(col, row):
-                    note_fill = EXPORT_CELL_FILL_COLOR
+                # Key, or an explicit override) keeps its piece's own
+                # color -- unlike the live board's darkened tonic treatment
+                # (Piece.draw), since here the color is the whole point
+                # (which mode a note belongs to) and darkening it both
+                # muddies that and reads as hard to make out. Root status
+                # instead gets a heavier badge outline (see
+                # EXPORT_TONIC_OUTLINE_WEIGHT below).
+                #
+                # Grayscale (see controls.get_grayscale) is the default,
+                # solid black-root/gray-other/hatched-accidental scheme
+                # this export always used before mode colors existed.
+                # Unchecking it swaps every note's fill for its own
+                # piece's live mode color (self.color, the same one shown
+                # in the trays/board) instead -- two different tetrachord
+                # shapes that happen to land on identical board positions
+                # are otherwise indistinguishable once grayscale collapses
+                # them to the same black/gray, which is exactly what
+                # prompted this option (e.g. a Lydian pattern reads as
+                # plain Major in black-and-white).
+                is_tonic_cell = self._is_tonic(col, row)
+                split_fill = None
+                if grayscale:
+                    if piece.is_accidental:
+                        note_fill = EXPORT_ACCIDENTAL_FILL_COLOR
+                    elif is_tonic_cell:
+                        note_fill = EXPORT_CELL_FILL_COLOR
+                    else:
+                        note_fill = EXPORT_NON_ROOT_FILL_COLOR
                 else:
-                    note_fill = EXPORT_NON_ROOT_FILL_COLOR
+                    note_fill = self._export_piece_fill(piece)
+                    # Two tetrachords sharing a note (their pivot, by
+                    # construction -- see _is_tonic) both "own" this
+                    # badge equally; picking one piece's color over the
+                    # other via cell_map's last-wins entry would hide
+                    # that it's a member of both patterns. Splitting the
+                    # badge between both colors is only meaningful with
+                    # real mode colors -- grayscale's black/gray carries
+                    # no piece identity to split in the first place.
+                    contributors = cell_pieces.get((col, row), [])
+                    other = next((p for p, _, _ in contributors if p is not piece), None)
+                    if other is not None:
+                        split_fill = self._export_piece_fill(other)
                 outline_color = EXPORT_NOTE_OUTLINE_COLOR
+                # Grayscale's root already reads via a solid black fill
+                # (see above) -- this heavier outline is color mode's own
+                # substitute for that contrast, since color mode's fill no
+                # longer changes for the root (see _export_piece_fill).
+                outline_weight = EXPORT_TONIC_OUTLINE_WEIGHT if (is_tonic_cell and not grayscale) else EXPORT_NOTE_OUTLINE_WEIGHT
                 stripe_color = EXPORT_ACCIDENTAL_STRIPE_COLOR
                 label_color = EXPORT_LABEL_COLOR
 
@@ -1974,22 +2083,57 @@ class MainCanvas:
                 # need one, e.g. an open string) gets these flat colors
                 # instead of drawn at full strength -- see
                 # EXPORT_UNPLAYED_FILL_COLOR's comment for why solid
-                # colors, not alpha transparency.
+                # colors, not alpha transparency. A split badge collapses
+                # back to one flat color here too -- fading is a stronger,
+                # simpler signal than which two pieces share the note.
                 if played_only and not piece.is_played(dc, dr):
                     note_fill = EXPORT_UNPLAYED_FILL_COLOR
                     outline_color = EXPORT_UNPLAYED_OUTLINE_COLOR
                     stripe_color = EXPORT_UNPLAYED_STRIPE_COLOR
                     label_color = EXPORT_UNPLAYED_LABEL_COLOR
+                    split_fill = None
 
-                self.sketch.push_style()
-                self.sketch.set_stroke(outline_color)
-                self.sketch.set_stroke_weight(EXPORT_NOTE_OUTLINE_WEIGHT)
-                self.sketch.set_fill(note_fill)
                 badge_x = x + EXPORT_NOTE_INSET
                 badge_y = y + EXPORT_NOTE_INSET
                 badge_w = FRET_WIDTH - 2 * EXPORT_NOTE_INSET
                 badge_h = FRET_HEIGHT - 2 * EXPORT_NOTE_INSET
-                self.sketch.draw_rect(badge_x, badge_y, badge_w, badge_h)
+
+                self.sketch.push_style()
+                if split_fill is None:
+                    self.sketch.set_stroke(outline_color)
+                    self.sketch.set_stroke_weight(outline_weight)
+                    self.sketch.set_fill(note_fill)
+                    self.sketch.draw_rect(badge_x, badge_y, badge_w, badge_h)
+                else:
+                    # note_fill fills the whole badge first, then a
+                    # diagonal hatch in split_fill overlays it -- the same
+                    # _draw_diagonal_hatch mechanism as an accidental's
+                    # black-on-gray hatch below, just with the *other*
+                    # contributing piece's own color standing in for the
+                    # fixed black (see EXPORT_PIVOT_STRIPE_SPACING/_WEIGHT
+                    # for why this uses coarser stripes than that one). A
+                    # diagonal split into two solid triangles (this
+                    # badge's previous look) needed a direction rule to
+                    # decide which piece got which corner, and there's no
+                    # single rule that reads right for every shape a
+                    # pivot can sit on (e.g. a piece continuing to a
+                    # different string doesn't have a clean "left" or
+                    # "right" side to claim) -- per direct user request, a
+                    # hatch sidesteps that entirely: it reads as "two
+                    # patterns share this note" without implying either
+                    # one owns a particular corner.
+                    self.sketch.clear_stroke()
+                    self.sketch.set_fill(note_fill)
+                    self.sketch.draw_rect(badge_x, badge_y, badge_w, badge_h)
+                    self.sketch.set_stroke(split_fill)
+                    self.sketch.set_stroke_weight(EXPORT_PIVOT_STRIPE_WEIGHT)
+                    _draw_diagonal_hatch(
+                        self.sketch, badge_x, badge_y, badge_w, badge_h, EXPORT_PIVOT_STRIPE_SPACING
+                    )
+                    self.sketch.clear_fill()
+                    self.sketch.set_stroke(outline_color)
+                    self.sketch.set_stroke_weight(outline_weight)
+                    self.sketch.draw_rect(badge_x, badge_y, badge_w, badge_h)
                 if piece.is_accidental:
                     self.sketch.set_stroke(stripe_color)
                     self.sketch.set_stroke_weight(EXPORT_ACCIDENTAL_STRIPE_WEIGHT)
@@ -2008,30 +2152,7 @@ class MainCanvas:
                 # stroke is still active here; without clearing it the
                 # white label gets fully swallowed by a black outline.
                 self.sketch.clear_stroke()
-                if suffix and view == "interval":
-                    # Ordinal suffix: draw the digit and its small raised
-                    # suffix as two separate draw_text calls sharing one
-                    # split point -- draw_text has no text-measurement API
-                    # to size a single mixed-font string, so the split
-                    # point is estimated from character count instead (see
-                    # _estimate_text_width) and centered so the *combined*
-                    # two-part label lands in the middle of the cell,
-                    # rather than a fixed offset tuned only for a single
-                    # digit (which let a wider main part, e.g. "F#" in the
-                    # vanilla view below, push its suffix past the cell's
-                    # edge).
-                    suffix_font_size = EXPORT_ORDINAL_SUFFIX_FONT_SIZE
-                    main_width = _estimate_text_width(label, EXPORT_LABEL_FONT_SIZE)
-                    suffix_width = _estimate_text_width(suffix, suffix_font_size)
-                    cx = x + FRET_WIDTH / 2 + (main_width - suffix_width) / 2
-                    cy = y + FRET_HEIGHT / 2
-                    self.sketch.set_text_font("sans-serif", EXPORT_LABEL_FONT_SIZE)
-                    self.sketch.set_text_align("right", "center")
-                    self.sketch.draw_text(cx, cy, label)
-                    self.sketch.set_text_font("sans-serif", suffix_font_size)
-                    self.sketch.set_text_align("left", "top")
-                    self.sketch.draw_text(cx, cy - EXPORT_LABEL_FONT_SIZE * 0.28, suffix)
-                elif suffix:
+                if suffix:
                     # Vanilla view's octave digit: same split-point
                     # technique as the ordinal suffix above, but same
                     # baseline as the letter (not raised) and smaller
@@ -2050,49 +2171,118 @@ class MainCanvas:
                     self.sketch.set_text_align("left", "center")
                     self.sketch.draw_text(cx, cy, suffix)
                 else:
-                    self.sketch.set_text_font("sans-serif", EXPORT_LABEL_FONT_SIZE)
+                    # Interval view's quality-prefixed label ("Aug4",
+                    # "dim5") runs up to 4 characters, wider than every
+                    # other view's label -- shrink the font so it stays
+                    # inside the badge instead of overflowing.
+                    font_size = EXPORT_INTERVAL_LABEL_FONT_SIZE if view == "interval" else EXPORT_LABEL_FONT_SIZE
+                    self.sketch.set_text_font("sans-serif", font_size)
                     self.sketch.set_text_align("center", "center")
                     self.sketch.draw_text(x + FRET_WIDTH / 2, y + FRET_HEIGHT / 2, label)
                 self.sketch.pop_style()
 
-        # Cross-string "same fret" bridge: when a piece's own root and one
-        # of its string-jumped notes land in the same column (see
-        # modes.yaml -- Major/Minor/Phrygian's tetrachord spans exactly
-        # one string's tuning interval, so the *last* note on the
-        # jumped-to string always lines up with the root's own fret), draw
-        # a small connector directly between their two badges. This can't
-        # reuse the footprint shading rect above the way a same-row gap
-        # connection does: that rect's flush edge sits *behind* the note
-        # badge, and a badge is opaque and nearly cell-sized, so across
-        # rows it swallows almost all of the connecting band, leaving only
-        # a sliver peeking out wherever that row's own unrelated left/right
-        # insets happen to leave a gap -- confirmed by exporting a "right"
-        # shape and finding its root/last-note connector rendered as a
-        # thin, oddly-clipped strip rather than a clean bridge. Drawn here,
-        # after every badge in pass 2 above, so it sits on top instead of
-        # underneath one.
-        for row in range(min_row, max_row):
-            for col in range(min_col, max_col + 1):
-                if (col, row) not in cell_map or (col, row + 1) not in cell_map:
+        # Cross-string bridge: connects a piece's own consecutive *strings*
+        # (see _row_blocks -- one block per string the shape's own cells
+        # touch, in the scale-degree order Shape.resolve_cells built them
+        # in) to each other as a whole, rather than picking one specific
+        # pair of notes to connect. This matters because the note where a
+        # jump's semitone math actually happens isn't always the note that
+        # reads as the natural connecting point: a "left" shape's jump
+        # happens between its degree-2 and degree-3 notes, but per direct
+        # user report, bridging exactly that pair produced a long,
+        # confusing reach when the shape's root and its *last* note
+        # happened to already share a fret one string up (true for every
+        # Major/Minor/Phrygian shape in a perfect-4th tuning, since their
+        # total span equals the tuning's own string interval) -- the
+        # obvious, already-aligned connection sat one note away from the
+        # one actually being drawn. Comparing the two strings' whole spans
+        # instead picks whichever pair of frets is closest, which is the
+        # aligned one whenever an alignment exists, and still bridges
+        # cleanly (via the same riser+overhang shape as before) when it
+        # doesn't -- e.g. a "zig"/"open" shape's wider jumps, which have
+        # no such coincidence.
+        #
+        # Drawn as an "L", not a diagonal shortcut straight from one badge
+        # to the other: a riser at the closer string's own nearest fret
+        # crossing into the new string, then -- only if that riser doesn't
+        # already land inside this piece's own footprint on the new
+        # string -- a run along that string over to it. Per direct user
+        # feedback, a direct diagonal reads as a made-up shortcut that
+        # visually cuts through whatever unrelated notes happen to sit
+        # between the two columns, where an elbow instead reads as "moved
+        # to the new string, then slid to this fret" -- the actual
+        # physical sequence a jump represents. The horizontal run is
+        # skipped whenever the riser already lands within the piece's own
+        # footprint span on that string (pass 2 above -- gaps included --
+        # already shades every column in that span, so redrawing any of
+        # it here would double up the same translucent fill and read as a
+        # visibly darker seam rather than one continuous pipe); otherwise
+        # it spans only the *overhang* between the riser and that span's
+        # nearest edge, picking up exactly where pass 2's own shading
+        # leaves off instead of overlapping it.
+        #
+        # This can't reuse the footprint shading rect from pass 2 above
+        # for the riser itself: that rect's flush edge sits *behind* the
+        # note badge, and a badge is opaque and nearly cell-sized, so
+        # across rows it swallows almost all of the connecting band,
+        # leaving only a sliver peeking out wherever that row's own
+        # unrelated left/right insets happen to leave a gap -- confirmed
+        # by exporting a "right" shape and finding its root/last-note
+        # connector rendered as a thin, oddly-clipped strip rather than a
+        # clean bridge. Drawn here, after every badge in pass 2 above, so
+        # it sits on top instead of underneath one.
+        border_margin = EXPORT_NOTE_OUTLINE_WEIGHT / 2
+        for piece in self.board_pieces:
+            pipe_fill = EXPORT_FOOTPRINT_FILL_COLOR if grayscale else _darken(piece.color, EXPORT_PIPE_DARKEN_FACTOR)
+            blocks = _row_blocks(piece.cells)
+            for (dr1, cols1), (dr2, cols2) in itertools.pairwise(blocks):
+                source_row = round(piece.row) + dr1
+                target_row = round(piece.row) + dr2
+                if source_row not in self.strings_by_row or target_row not in self.strings_by_row:
                     continue
-                if not self._export_flush((col, row), (col, row + 1), piece_footprints):
-                    continue
-                # Stop short of each badge's own outline rather than
-                # meeting it exactly -- draw_rect's stroke is centered on
-                # the rect's mathematical edge, so it extends a half-
-                # weight beyond that edge into whatever's drawn next; a
-                # bridge reaching all the way to the edge painted over
-                # (and visibly notched) the outer half of that border.
-                border_margin = EXPORT_NOTE_OUTLINE_WEIGHT / 2
+
+                abs_cols1 = [round(piece.col) + c for c in cols1]
+                min1, max1 = min(abs_cols1), max(abs_cols1)
+                min2 = round(piece.col) + min(cols2)
+                max2 = round(piece.col) + max(cols2)
+                if max1 < min2:
+                    source_col = max1
+                elif min1 > max2:
+                    source_col = min1
+                else:
+                    source_col = max(min1, min2)  # spans already overlap -- any shared column works
+
+                if target_row > source_row:
+                    riser_top = row_y(source_row) + FRET_HEIGHT - EXPORT_NOTE_INSET + border_margin
+                    riser_bottom = row_y(target_row) + EXPORT_FOOTPRINT_INSET
+                else:
+                    riser_top = row_y(target_row) + FRET_HEIGHT - EXPORT_FOOTPRINT_INSET
+                    riser_bottom = row_y(source_row) + EXPORT_NOTE_INSET - border_margin
+
                 self.sketch.push_style()
                 self.sketch.clear_stroke()
-                self.sketch.set_fill(EXPORT_FOOTPRINT_FILL_COLOR)
+                self.sketch.set_fill(pipe_fill)
                 self.sketch.draw_rect(
-                    col_x(col) + EXPORT_NOTE_INSET,
-                    row_y(row) + FRET_HEIGHT - EXPORT_NOTE_INSET + border_margin,
-                    FRET_WIDTH - 2 * EXPORT_NOTE_INSET,
-                    2 * EXPORT_NOTE_INSET - 2 * border_margin,
+                    col_x(source_col) + EXPORT_FOOTPRINT_INSET,
+                    riser_top,
+                    FRET_WIDTH - 2 * EXPORT_FOOTPRINT_INSET,
+                    riser_bottom - riser_top,
                 )
+
+                if source_col < min2:
+                    self.sketch.draw_rect(
+                        col_x(source_col) + EXPORT_FOOTPRINT_INSET,
+                        row_y(target_row) + EXPORT_FOOTPRINT_INSET,
+                        (min2 - source_col) * FRET_WIDTH,
+                        FRET_HEIGHT - 2 * EXPORT_FOOTPRINT_INSET,
+                    )
+                elif source_col > max2:
+                    self.sketch.draw_rect(
+                        col_x(max2) + FRET_WIDTH - EXPORT_FOOTPRINT_INSET,
+                        row_y(target_row) + EXPORT_FOOTPRINT_INSET,
+                        (source_col - max2) * FRET_WIDTH,
+                        FRET_HEIGHT - 2 * EXPORT_FOOTPRINT_INSET,
+                    )
                 self.sketch.pop_style()
 
         # Technique connections (slide/hammer-on/pull-off/roll/barre) --

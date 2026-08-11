@@ -62,6 +62,35 @@ EXPORT_ACCIDENTAL_STRIPE_WEIGHT = 3
 # colors are close (e.g. a non-root gray badge over the gray-ish pipe).
 EXPORT_NOTE_OUTLINE_COLOR = "#000000"
 EXPORT_NOTE_OUTLINE_WEIGHT = 2
+# With Grayscale unchecked (see controls.get_grayscale), the root/tonic
+# note keeps its own piece color instead of being darkened -- per direct
+# user feedback, the color is semantic (which mode/tetrachord this note
+# belongs to) and darkening it both hides that meaning and reads as hard
+# to make out. Root status still needs to read at a glance, so it gets
+# this heavier outline instead -- same idea as the live board's own
+# _TONIC_BORDER_WEIGHT in main.py, just for the export's badge outline.
+# Grayscale keeps its original solid-black-fill treatment for the root
+# untouched (see EXPORT_CELL_FILL_COLOR) -- that scheme has no color to
+# preserve, so darkening was never the readability problem there.
+EXPORT_TONIC_OUTLINE_WEIGHT = 4
+
+# A note badge shared by two pieces (their pivot -- see MainCanvas.
+# _is_tonic) hatches between both contributing colors instead of picking
+# one arbitrarily (see MainCanvas._export_png's cell_pieces) -- the same
+# _draw_diagonal_hatch mechanism as an accidental's own black-on-gray
+# hatch, just with the other piece's color standing in for the fixed
+# black. Not the same spacing/weight, though: two actual mode colors
+# need to each read clearly as their own color, where accidental's hatch
+# only ever needs its black stripes to read against gray -- per direct
+# user feedback the accidental spacing's finer stripes made two real
+# colors blend into a muddier, harder-to-place-either-color texture at a
+# glance, so this is roughly double both values (half as many stripes,
+# same proportion of fill to stripe within each one). Only relevant with
+# Grayscale unchecked -- see controls.get_grayscale -- since a grayscale
+# badge's fill carries no piece-identity information to hatch in the
+# first place.
+EXPORT_PIVOT_STRIPE_SPACING = 16
+EXPORT_PIVOT_STRIPE_WEIGHT = 6
 
 # "Played only" export option (see MainCanvas._export_png/controls.
 # get_played_only): a note that isn't played (see Piece.is_played --
@@ -87,14 +116,23 @@ EXPORT_UNPLAYED_STRIPE_COLOR = "#BFBFBF"
 EXPORT_UNPLAYED_LABEL_COLOR = "#A0A0A0"
 
 # The "pipe" -- every cell that's part of some placed piece's footprint (a
-# real note *or* a skipped-fret gap) gets this background. Darker than a
-# faint tint so the connectivity it shows reads clearly at print scale, but
-# still lighter than EXPORT_NON_ROOT_FILL_COLOR so a gray non-root badge
-# still stands out against it. See this file's docstring for how the two
-# insets below relate.
+# real note *or* a skipped-fret gap), plus every cross-string connector
+# bridging two of a piece's own notes on adjacent strings -- gets this
+# background with Grayscale on. Darker than a faint tint so the
+# connectivity it shows reads clearly at print scale, but still lighter
+# than EXPORT_NON_ROOT_FILL_COLOR so a gray non-root badge still stands out
+# against it. See this file's docstring for how the two insets below relate.
 EXPORT_FOOTPRINT_FILL_COLOR = "#C9C9C9"
-EXPORT_FOOTPRINT_INSET = 10
-EXPORT_NOTE_INSET = 5
+EXPORT_FOOTPRINT_INSET = 11
+EXPORT_NOTE_INSET = 7
+# With Grayscale unchecked, the pipe uses the owning piece's own mode color
+# instead of the flat gray above -- per direct user feedback, this makes it
+# far more obvious at a glance which pipe belongs to which pattern when
+# several sit on adjacent strings. Darkened (not the plain mode color) so
+# it still reads as background sitting behind/around the badges, which
+# keep the undarkened color -- same figure/ground relationship the flat
+# gray pipe already had relative to a colored badge.
+EXPORT_PIPE_DARKEN_FACTOR = 0.75
 
 # Technique connection glyphs (slide/hammer-on/pull-off/roll/barre -- see
 # draw_connection in main.py).
@@ -110,6 +148,11 @@ EXPORT_LABEL_FONT_SIZE = 20
 # so it's de-emphasized rather than drawn at equal weight (see
 # _split_note_octave in main.py).
 EXPORT_NOTE_OCTAVE_FONT_SIZE = 10
+# The interval view's quality-prefixed label ("Aug4", "dim5", "M3") runs up
+# to 4 characters, wider than any other view's label -- smaller than
+# EXPORT_LABEL_FONT_SIZE so the widest labels (Lydian's Aug4, Locrian's
+# dim5) stay inside the note badge instead of overflowing it.
+EXPORT_INTERVAL_LABEL_FONT_SIZE = 14
 
 # String names, anchored at the true open-string column (see main.py's
 # _export_png) -- which can mean sitting on top of a note badge/footprint
@@ -131,20 +174,13 @@ EXPORT_FRET_MARKER_COLOR = "#888888"
 EXPORT_FRET_MARKER_RADIUS = 4
 EXPORT_OPEN_STRING_MARKER_FONT_SIZE = 14
 
-# The interval view's small raised ordinal suffix ("2nd", "3rd", ...) --
-# see _export_label/_ordinal_suffix in main.py for the digit-to-suffix
-# text mapping itself (that's data/logic, not a style knob, so it stays in
-# main.py); this one just controls how that suffix is drawn (its position
-# comes from EXPORT_TEXT_WIDTH_FACTOR below, not a fixed offset).
-EXPORT_ORDINAL_SUFFIX_FONT_SIZE = 11
 # No text-measurement API is available (see _estimate_text_width in
-# main.py), so a main+suffix label's split point (interval's digit+
-# ordinal-suffix, vanilla's letter+octave) is estimated from character
-# count instead of exact pixel width -- this is that estimate's average
-# per-character width, as a fraction of font size. Tuned by eye; real
-# character widths vary; a 2-character main part like "F#" no longer
-# visibly overflows its cell with this in place, which a fixed offset
-# (this constant's predecessor) couldn't account for.
+# main.py), so the vanilla view's letter+octave split point is estimated
+# from character count instead of exact pixel width -- this is that
+# estimate's average per-character width, as a fraction of font size. Tuned
+# by eye; real character widths vary; a 2-character main part like "F#" no
+# longer visibly overflows its cell with this in place, which a fixed
+# offset (this constant's predecessor) couldn't account for.
 EXPORT_TEXT_WIDTH_FACTOR = 0.6
 
 # The physical "nut" -- the board's edge just before column 0 -- drawn as

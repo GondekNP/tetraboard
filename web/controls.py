@@ -36,6 +36,7 @@ _CLEAR_BOARD_ID = "control-clear-board"
 _PATTERN_NAME_ID = "control-pattern-name"
 _EXPORT_VIEW_ID = "control-export-view"
 _PLAYED_ONLY_ID = "control-played-only"
+_GRAYSCALE_ID = "control-grayscale"
 _ANNOTATE_TOGGLE_ID = "control-annotate-toggle"
 _EXPORT_PNG_ID = "control-export-png"
 _EXPORT_FOLDER_ID = "control-export-folder"
@@ -189,6 +190,22 @@ def get_played_only() -> bool:
     shape a piece represents.
     """
     element = js.document.getElementById(_PLAYED_ONLY_ID)
+    return bool(element.checked)
+
+
+def get_grayscale() -> bool:
+    """Read the "Grayscale" export checkbox.
+
+    When checked, note badges render in the existing black (root) / gray
+    (non-root) / gray-with-hatch (accidental) scheme (see main.py's
+    _export_png). When unchecked, each note badge instead uses its own
+    piece's live mode color (the same color its tray/board piece already
+    has) -- distinguishing which mode/shape a note came from is otherwise
+    impossible in grayscale once labels are covered by another view (e.g.
+    two differently-shaped patterns that happen to land on the same board
+    positions read as identical in black-and-white).
+    """
+    element = js.document.getElementById(_GRAYSCALE_ID)
     return bool(element.checked)
 
 

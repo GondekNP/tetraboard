@@ -174,17 +174,39 @@ def get_scale_pitch_classes(root: str, intervals: list[int] = IONIAN_INTERVALS) 
     return {(root_semitone + semitones) % 12 for semitones in cumulative}
 
 
-def get_scale_degree(
-    root: str, note: str, intervals: list[int] = IONIAN_INTERVALS
-) -> int | None:
-    """`note`'s 1-indexed scale degree (1-7) in the scale built from `root`,
-    or None if `note` isn't a member of that scale at all.
+# Standard Western interval quality, keyed by (scale degree, cumulative
+# semitones from the root at that degree) -- derived purely from semitone
+# distance, not from which mode produced it, so a minor 7th is a minor
+# 7th regardless of mode. Verified by hand against all 7 MODE_INTERVALS
+# cumulative arrays: Lydian's degree 4 lands on 6 semitones (hence "Aug4")
+# and Locrian's degree 5 lands on 6 semitones (hence "dim5") purely as a
+# side effect of this table, not from any mode-specific branching. Degree
+# 6 never lands on an altered semitone offset across these 7 modes.
+_INTERVAL_QUALITY_BY_DEGREE_SEMITONES: dict[tuple[int, int], str] = {
+    (1, 0): "P",
+    (2, 1): "m", (2, 2): "M",
+    (3, 3): "m", (3, 4): "M",
+    (4, 5): "P", (4, 6): "Aug",
+    (5, 6): "dim", (5, 7): "P",
+    (6, 8): "m", (6, 9): "M",
+    (7, 10): "m", (7, 11): "M",
+}
 
-    Same cumulative-semitone construction as get_scale_pitch_classes, but
-    keeping the degree position instead of collapsing to a bare set --
-    used by the Interval export view (main.py's _export_png) to label each
-    note by its degree rather than its letter name. Plain 1-7, wrapping at
-    the octave -- no compound (9th/11th/13th) numbering.
+
+def get_interval_label(
+    root: str, note: str, intervals: list[int] = IONIAN_INTERVALS
+) -> str | None:
+    """`note`'s interval-quality label relative to `root` (e.g. "M3",
+    "P4", "Aug4", "dim5"), or None if `note` isn't a member of the scale
+    built from `root`/`intervals` at all.
+
+    Quality comes purely from (scale degree, semitones-from-root) via
+    _INTERVAL_QUALITY_BY_DEGREE_SEMITONES -- a minor 7th is a minor 7th
+    regardless of which mode produced it. Lydian's augmented 4th and
+    Locrian's diminished 5th fall out of this table as a side effect of
+    being correct per degree+semitone pair, not from any mode-specific
+    branching. Used by the Interval export view (main.py's _export_png)
+    in place of a bare scale-degree number.
 
     `root` is a bare pitch class like get_scale_pitch_classes; `note` may
     be octave-qualified (e.g. "A1") or bare, same as pitch_class_semitone.
@@ -194,8 +216,9 @@ def get_scale_degree(
         cumulative.append(cumulative[-1] + step)
 
     root_semitone = pitch_class_semitone(root)
-    degrees_by_semitone = {
-        (root_semitone + semitones) % 12: degree
-        for degree, semitones in enumerate(cumulative, start=1)
-    }
-    return degrees_by_semitone.get(pitch_class_semitone(note))
+    note_semitone = pitch_class_semitone(note)
+    for degree, semitones in enumerate(cumulative, start=1):
+        if (root_semitone + semitones) % 12 == note_semitone:
+            quality = _INTERVAL_QUALITY_BY_DEGREE_SEMITONES.get((degree, semitones))
+            return f"{quality}{degree}" if quality else None
+    return None
